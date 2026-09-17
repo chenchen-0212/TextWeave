@@ -1,0 +1,25 @@
+# 依赖
+node_modules
+
+# 前端构建产物（由 npm run build / wails build 生成）
+frontend/dist
+frontend/package.json.md5
+
+# Go / Wails 构建产物
+build/bin
+
+# 打包分发产物（exe / dmg / zip，体积大且可重新构建）
+dist/
+
+# 脚本临时目录（test-core / test-template 的中间产物）
+.tmp/
+
+# NSIS 打包时下载的 WebView2 引导程序
+build/windows/installer/tmp/
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.log

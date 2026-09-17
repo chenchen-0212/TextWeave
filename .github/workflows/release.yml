@@ -1,0 +1,147 @@
+name: Release
+
+# 跨平台发布流水线。
+#
+# 为什么必须走 CI：
+#   Windows 与 macOS 的产物各自只能在对应平台上构建（Wails 依赖 cgo 调用
+#   各平台的 WebView 原生绑定），无法交叉编译。CI 正好提供了两个平台的
+#   runner，是最省事的一次性出全平台产物的方式。
+#
+# 触发方式：
+#   1. 推送形如 v0.2.0 的 tag → 自动构建并创建 GitHub Release
+#   2. 在 Actions 页面手动触发 → 只构建并上传 artifacts
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  WAILS_VERSION: v2.15.0
+  GO_VERSION: '1.25'
+  NODE_VERSION: '22'
+  APP_VERSION: '0.2.0'
+
+jobs:
+  # ---------------------------------------------------------------- Windows
+  windows:
+    name: Windows (exe + NSIS 安装包)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 安装 Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+
+      - name: 安装 NSIS
+        run: choco install nsis --no-progress -y
+
+      - name: 把 NSIS 加入 PATH
+        shell: pwsh
+        run: echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: 构建
+        shell: pwsh
+        env:
+          CGO_ENABLED: '1'
+        run: wails build -clean -platform windows/amd64 -nsis -webview2 download
+
+      - name: 整理产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Copy-Item build\bin\TextWeave.exe "dist\TextWeave-$env:APP_VERSION-windows-amd64-portable.exe"
+          Copy-Item build\bin\textweave-amd64-installer.exe "dist\TextWeave-$env:APP_VERSION-windows-amd64-setup.exe"
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: textweave-windows
+          path: dist/*.exe
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- macOS
+  macos:
+    name: macOS (universal .app + .dmg)
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 安装 Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@${{ env.WAILS_VERSION }}
+
+      - name: 构建 .app（universal）
+        env:
+          CGO_ENABLED: '1'
+        run: wails build -clean -platform darwin/universal
+
+      - name: 打包 .dmg 与 .zip
+        env:
+          VERSION: ${{ env.APP_VERSION }}
+          # 配置了签名证书与公证凭据时会自动签名并公证，否则产出未签名版本
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: bash scripts/package-macos.sh "${{ env.APP_VERSION }}"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: textweave-macos
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------- 发布
+  release:
+    name: 创建 Release
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 下载全部产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            artifacts/textweave-windows/*.exe
+            artifacts/textweave-macos/*.dmg
+            artifacts/textweave-macos/*.zip

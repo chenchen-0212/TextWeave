@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "textweave",
+  "outputfilename": "TextWeave",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "TextWeave",
+    "email": "textweave@example.com"
+  },
+  "info": {
+    "companyName": "TextWeave",
+    "productName": "文织 TextWeave",
+    "productVersion": "0.2.0",
+    "copyright": "Copyright © 2026 TextWeave",
+    "comments": "长文自动切段，渲染到自有背景图，批量产出系列图文"
+  }
+}

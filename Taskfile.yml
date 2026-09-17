@@ -1,0 +1,101 @@
+version: '3'
+
+# 文织 TextWeave · 跨平台构建任务
+#
+# 需要 go-task（https://taskfile.dev）。未安装时可直接照抄 cmds 里的命令执行。
+#
+# 平台限制说明：
+#   - Windows 产物（exe + NSIS 安装包）必须在 Windows 上构建；
+#   - macOS 产物（.app + .dmg）必须在 macOS 上构建，因为 Wails 依赖 cgo
+#     调用 Cocoa / WebKit，无法交叉编译。
+#   - 两端都能构建的只有前端与 Go 语言的静态检查。
+#
+# 两个平台都想要，最省事的方式是走 .github/workflows/release.yml 里的 CI。
+
+vars:
+  APP_NAME: TextWeave
+  VERSION: '0.2.0'
+  WAILS_VERSION: v2.15.0
+  DIST_DIR: dist
+
+tasks:
+  default:
+    desc: 列出所有可用任务
+    cmds:
+      - task --list
+
+  # ---------------------------------------------------------------- 环境
+
+  doctor:
+    desc: 检查本机构建环境是否齐备
+    cmds:
+      - wails doctor
+
+  deps:
+    desc: 安装 Go 与前端依赖
+    cmds:
+      - go mod download
+      - cd frontend && npm install
+
+  check:
+    desc: 静态检查（任何平台都可运行，不需要 cgo）
+    cmds:
+      - go vet ./...
+      - go test ./...
+      - cd frontend && npm run build
+
+  test:
+    desc: 运行全部验证（Go 单元测试 + 排版内核 + 模板编解码）
+    cmds:
+      - go test ./...
+      - node scripts/test-core.mjs
+      - node scripts/test-template.mjs
+
+  icon:
+    desc: 重新生成应用图标（.ico / .icns / appicon.png）
+    cmds:
+      - node scripts/make-icon.mjs
+
+  # ---------------------------------------------------------------- 开发
+
+  dev:
+    desc: 开发模式，前端热重载
+    cmds:
+      - wails dev
+
+  # ---------------------------------------------------------------- 构建
+
+  build:windows:
+    desc: 构建 Windows exe 与 NSIS 安装包（必须在 Windows 上运行）
+    cmds:
+      - wails build -clean -platform windows/amd64 -nsis -webview2 download
+      - powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1
+    env:
+      CGO_ENABLED: '1'
+
+  build:macos:
+    desc: 构建 macOS 通用二进制 .app 与 .dmg（必须在 macOS 上运行）
+    cmds:
+      - bash scripts/build-macos.sh
+    env:
+      CGO_ENABLED: '1'
+
+  build:linux:
+    desc: 构建 Linux 产物（必须在 Linux 上运行，需 libgtk-3-dev 与 libwebkit2gtk）
+    cmds:
+      - wails build -clean -platform linux/amd64
+    env:
+      CGO_ENABLED: '1'
+
+  # ---------------------------------------------------------------- 发布
+
+  dist:clean:
+    desc: 清空分发目录
+    cmds:
+      - rm -rf {{.DIST_DIR}}
+      - mkdir -p {{.DIST_DIR}}
+
+  release:notes:
+    desc: 打印产物清单
+    cmds:
+      - ls -la {{.DIST_DIR}}

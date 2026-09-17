@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+  <!--
+    文织 TextWeave 应用图标 · 完整版（24 网格，用于 32px 及以上）
+
+    语义：一张写满文字的卡片 + 侧后方两张卡片 = 一段长文被拆成一叠图文卡片。
+
+    实现要点：
+      - 卡片是实心白，三条文字是真正的「镂空」（靠 mask 打洞），
+        这样背景渐变能透出来，比画成蓝色横杠更干净。
+      - mask 里的 rect 必须显式写 stroke="none"。否则会继承外层
+        <g> 的白色描边，把黑色填充整个盖住，镂空完全失效。
+      - 基础几何取自 Lucide 的 gallery-horizontal-end（ISC 许可），
+        在其卡片内增加了文字线元素。
+  -->
+  <defs>
+    <mask id="cut" maskUnits="userSpaceOnUse" x="0" y="0" width="24" height="24">
+      <rect x="0" y="0" width="24" height="24" fill="#fff" stroke="none"/>
+      <rect x="12.6" y="7.7" width="6.8" height="1.8" rx="0.9" fill="#000" stroke="none"/>
+      <rect x="12.6" y="11.1" width="6.8" height="1.8" rx="0.9" fill="#000" stroke="none"/>
+      <rect x="12.6" y="14.5" width="4.4" height="1.8" rx="0.9" fill="#000" stroke="none"/>
+    </mask>
+  </defs>
+
+  <!-- 侧后方的两张卡片（竖杠形式） -->
+  <path d="M3 9.5v5"/>
+  <path d="M6.5 7.5v9"/>
+
+  <!-- 主卡片：实心 + 文字镂空 -->
+  <rect x="10" y="3.5" width="12" height="17" rx="2.6" fill="#ffffff" stroke="none" mask="url(#cut)"/>
+</svg>

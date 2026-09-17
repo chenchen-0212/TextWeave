@@ -1,0 +1,18 @@
+# 统一换行符，避免跨平台检出后脚本失效
+* text=auto
+
+# Shell 脚本必须是 LF：在 Windows 上带 CRLF 检出后，macOS/Linux 执行会报
+# "bad interpreter: /bin/bash^M"
+*.sh text eol=lf
+
+# PowerShell 脚本按 Windows 习惯用 CRLF（本身已带 UTF-8 BOM）
+*.ps1 text eol=crlf
+
+# 二进制资源，不做换行转换与 diff
+*.png binary
+*.ico binary
+*.icns binary
+*.exe binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

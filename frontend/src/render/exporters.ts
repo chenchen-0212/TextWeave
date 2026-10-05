@@ -2,7 +2,7 @@ import type { Page, StyleConfig } from '../types'
 import * as api from '../backend/api'
 import type { RenderContext } from './CanvasRenderer'
 import { CanvasRenderer } from './CanvasRenderer'
-import { buildFilename, extForFormat } from '../utils/filename'
+import { buildFilename, extForFormat, joinDir, renderSubfolder } from '../utils/filename'
 
 /**
  * 导出器（对应决策 D-14：默认逐张落盘）。
@@ -21,6 +21,15 @@ export interface ExportProgress {
   phase: string
 }
 
+export interface ExportLabels {
+  /** 任务标签：书名（{book} 变量与子目录） */
+  book?: string
+  /** 任务标签：渠道（{channel} 变量与子目录） */
+  channel?: string
+  /** 尺寸标签（{size} 变量与子目录，多尺寸导出时传入） */
+  size?: string
+}
+
 export interface ExportOptions {
   pages: Page[]
   rc: RenderContext
@@ -28,12 +37,21 @@ export interface ExportOptions {
   onProgress?: (p: ExportProgress) => void
   /** 返回 true 时中断导出（已写出的文件保持可用） */
   shouldCancel?: () => boolean
+  /** 任务标签覆盖（批处理队列按任务传入，避免反复改配置） */
+  labels?: ExportLabels
+  /**
+   * 输出目录覆盖。不传时按配置里的子目录模板解析；
+   * Go 侧 SaveImage 会 MkdirAll，多级子目录无需预创建。
+   */
+  dirOverride?: string
 }
 
 export interface ExportResult {
   files: string[]
   zipPath: string
   cancelled: boolean
+  /** 实际输出目录（含子目录），供界面提示与「打开目录」使用 */
+  outDir: string
 }
 
 /** 让出主线程，避免长时间导出把界面卡死。 */
@@ -55,6 +73,27 @@ function primaryCoverTitle(cfg: StyleConfig): string {
   return first?.title?.trim() ?? ''
 }
 
+/** 解析任务标签：选项覆盖 > 配置值（渠道名在渠道节） */
+function resolveLabels(cfg: StyleConfig, override?: ExportLabels): Required<ExportLabels> {
+  return {
+    book: (override?.book ?? cfg.export.book ?? '').trim(),
+    channel: (override?.channel ?? cfg.channel.name ?? '').trim(),
+    size: (override?.size ?? '').trim(),
+  }
+}
+
+/** 解析实际输出目录：覆盖目录 > 配置目录 + 子目录模板。 */
+function resolveOutDir(cfg: StyleConfig, labels: Required<ExportLabels>, dirOverride?: string): string {
+  if (dirOverride) return dirOverride
+  const sub = renderSubfolder(cfg.channel.subfolderPattern, {
+    book: labels.book,
+    channel: labels.channel,
+    size: labels.size,
+    date: new Date(),
+  })
+  return joinDir(cfg.export.dir, sub)
+}
+
 /** 导出全部页面。 */
 export async function exportPages(opts: ExportOptions): Promise<ExportResult> {
   const { pages, rc, renderer, onProgress, shouldCancel } = opts
@@ -67,6 +106,9 @@ export async function exportPages(opts: ExportOptions): Promise<ExportResult> {
     throw new Error('没有可导出的页面，请先输入文本')
   }
 
+  const labels = resolveLabels(cfg, opts.labels)
+  const outDir = resolveOutDir(cfg, labels, opts.dirOverride)
+
   const ext = extForFormat(cfg.canvas.format)
   const title = primaryCoverTitle(cfg)
   const total = pages.length
@@ -77,7 +119,7 @@ export async function exportPages(opts: ExportOptions): Promise<ExportResult> {
 
   for (let i = 0; i < pages.length; i++) {
     if (shouldCancel?.()) {
-      return { files, zipPath: '', cancelled: true }
+      return { files, zipPath: '', cancelled: true, outDir }
     }
 
     const page = pages[i]
@@ -90,13 +132,22 @@ export async function exportPages(opts: ExportOptions): Promise<ExportResult> {
 
     const filename = buildFilename(
       cfg.export.filenameTemplate,
-      { index: i + 1, total, title, date: new Date(), pad: cfg.export.pad },
+      {
+        index: i + 1,
+        total,
+        title,
+        date: new Date(),
+        pad: cfg.export.pad,
+        book: labels.book,
+        channel: labels.channel,
+        size: labels.size,
+      },
       ext,
     )
 
     onProgress?.({ done: i, total, filename, phase: `正在导出 ${i + 1}/${total}` })
 
-    const full = await api.saveImage(cfg.export.dir, filename, base64)
+    const full = await api.saveImage(outDir, filename, base64)
     files.push(full)
 
     // 仅在需要时保留 base64，避免无谓的内存占用
@@ -111,10 +162,10 @@ export async function exportPages(opts: ExportOptions): Promise<ExportResult> {
   let zipPath = ''
   if (collectZip && zipEntries.length > 0) {
     onProgress?.({ done: total, total, filename: '', phase: '正在打包 ZIP' })
-    zipPath = await api.saveZip(cfg.export.dir, 'textweave-cards.zip', zipEntries)
+    zipPath = await api.saveZip(outDir, 'textweave-cards.zip', zipEntries)
   }
 
-  return { files, zipPath, cancelled: false }
+  return { files, zipPath, cancelled: false, outDir }
 }
 
 /** 只导出指定的一页。 */

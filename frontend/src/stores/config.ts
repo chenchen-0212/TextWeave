@@ -4,6 +4,7 @@ import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import type {
   CoverItem,
   Diagnostics,
+  ExportSizeEntry,
   FontEntry,
   Geometry,
   ImageInfo,
@@ -15,9 +16,12 @@ import type {
 import {
   CANVAS_PRESETS,
   MAX_COVERS,
+  MAX_OVERLAY_ITEMS,
   defaultConfig,
   defaultCoverItem,
   defaultMaskOfType,
+  defaultOverlayImageItem,
+  defaultOverlayTextItem,
 } from '../types'
 import { buildLayout } from '../core/layout'
 import { computeGeometry } from '../core/layout'
@@ -26,6 +30,7 @@ import { countChars } from '../core/normalizer'
 import * as api from '../backend/api'
 import { base64ToBlob } from '../utils/bytes'
 import { sanitizeConfig } from '../utils/templateCodec'
+import { joinDir, renderSubfolder } from '../utils/filename'
 import { ensureFontLoaded, waitForFonts } from '../utils/fontLoader'
 import type { BackgroundSource, RenderContext } from '../render/CanvasRenderer'
 import { CanvasRenderer } from '../render/CanvasRenderer'
@@ -81,6 +86,12 @@ export const useAppStore = defineStore('app', () => {
    * 重复解码；替换整个 Map 引用才能触发 shallowRef 的响应式更新。
    */
   const coverImages = shallowRef<Map<string, BackgroundSource>>(new Map())
+
+  /**
+   * 引导元素图片（二维码/logo/水印）的位图缓存，结构与 coverImages 相同。
+   * 多个元素可引用同一张图（如每页同一枚二维码），按路径去重。
+   */
+  const overlayImages = shallowRef<Map<string, BackgroundSource>>(new Map())
 
   // ------------------------------------------------------------ 字体
 
@@ -149,6 +160,8 @@ export const useAppStore = defineStore('app', () => {
         bmp && info ? { image: bmp, width: info.width, height: info.height } : null,
       // 封面专属背景图缓存（Map 整体替换以触发更新）
       coverImages: coverImages.value,
+      // 引导元素图片缓存
+      overlayImages: overlayImages.value,
     }
   })
 
@@ -491,24 +504,82 @@ export const useAppStore = defineStore('app', () => {
     if (changed) coverImages.value = next
   }
 
-  /** 预加载所有启用封面用到的专属背景图。 */
+  /** 预加载所有启用封面用到的专属背景图，并同步引导元素图片的加载与回收。 */
   async function syncCoverImages(): Promise<void> {
-    const wanted = new Set<string>()
+    const coverWanted = new Set<string>()
     for (const it of cfg.cover.items) {
       if (it.enabled && it.background.useOwn && it.background.path) {
-        wanted.add(it.background.path)
+        coverWanted.add(it.background.path)
+      }
+    }
+    const overlayWanted = new Set<string>()
+    for (const it of cfg.overlay.items) {
+      if (it.enabled && it.kind === 'image' && it.path) {
+        overlayWanted.add(it.path)
       }
     }
 
     let loaded = 0
-    for (const p of wanted) {
+    for (const p of coverWanted) {
       if (!coverImages.value.has(p)) {
         const src = await ensureCoverImage(p)
         if (src) loaded++
       }
     }
+    for (const p of overlayWanted) {
+      if (!overlayImages.value.has(p)) {
+        const src = await ensureOverlayImage(p)
+        if (src) loaded++
+      }
+    }
     pruneCoverImages()
+    pruneOverlayImages()
     if (loaded > 0) scheduleRebuild(0)
+  }
+
+  /** 加载一张引导元素图片到 overlayImages 缓存（与封面图缓存互相独立）。 */
+  async function ensureOverlayImage(path: string): Promise<BackgroundSource | null> {
+    if (!path) return null
+    const cached = overlayImages.value.get(path)
+    if (cached) return cached
+
+    try {
+      const info = await api.probeImage(path)
+      if (!info) return null
+      const b64 = await api.readFileBase64(path)
+      if (!b64) return null
+
+      const bitmap = await createImageBitmap(base64ToBlob(b64, info.mime))
+      const src: BackgroundSource = { image: bitmap, width: info.width, height: info.height }
+
+      const next = new Map(overlayImages.value)
+      next.set(path, src)
+      overlayImages.value = next
+      return src
+    } catch {
+      return null
+    }
+  }
+
+  /** 释放不再被任何引导元素引用的图片位图。 */
+  function pruneOverlayImages(): void {
+    const live = new Set(
+      cfg.overlay.items
+        .filter((it) => it.enabled && it.kind === 'image' && it.path)
+        .map((it) => (it as { path: string }).path),
+    )
+
+    let changed = false
+    const next = new Map<string, BackgroundSource>()
+    for (const [key, src] of overlayImages.value) {
+      if (live.has(key)) {
+        next.set(key, src)
+      } else {
+        ;(src.image as ImageBitmap).close?.()
+        changed = true
+      }
+    }
+    if (changed) overlayImages.value = next
   }
 
   function activeCover(): CoverItem | null {
@@ -710,7 +781,18 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
-  async function runExport(): Promise<void> {
+  /** 解析实际输出目录：配置目录 + 子目录模板（size 传入时进入 {size} 变量）。 */
+  function resolveOutDir(sizeLabel?: string, bookOverride?: string): string {
+    const sub = renderSubfolder(cfg.channel.subfolderPattern, {
+      book: bookOverride ?? cfg.export.book,
+      channel: cfg.channel.name,
+      size: sizeLabel,
+      date: new Date(),
+    })
+    return joinDir(cfg.export.dir, sub)
+  }
+
+  async function runExport(bookOverride?: string): Promise<void> {
     if (exporting.value) return
     exportError.value = ''
     exportSuccess.value = ''
@@ -741,16 +823,133 @@ export const useAppStore = defineStore('app', () => {
           exportPhase.value = p.phase
         },
         shouldCancel: () => cancelRequested,
+        // 批处理队列按任务传书名，覆盖配置里的标签
+        labels: bookOverride !== undefined ? { book: bookOverride } : undefined,
       })
 
+      const outDir = result.outDir || cfg.export.dir
       if (result.cancelled) {
         exportSuccess.value = `已取消，成功导出 ${result.files.length} 张`
       } else {
         const zipNote = result.zipPath ? '，并已打包 ZIP' : ''
-        exportSuccess.value = `已导出 ${result.files.length} 张到 ${cfg.export.dir}${zipNote}`
+        exportSuccess.value = `已导出 ${result.files.length} 张到 ${outDir}${zipNote}`
+        recordHistory(result.files.length, outDir)
       }
     } catch (e) {
       exportError.value = e instanceof Error ? e.message : '导出失败'
+    } finally {
+      exporting.value = false
+      exportPhase.value = ''
+    }
+  }
+
+  /**
+   * 多尺寸一次导出（对应优化项 O-01）。
+   *
+   * 每个勾选的渠道尺寸用同一份文本与视觉参数**独立重排**——不同宽高比下
+   * 分页张数可以不同，这是预期行为。所有尺寸先纯计算完布局，再统一逐张落盘，
+   * 全程共用单个导出 canvas，内存策略与单尺寸导出一致。
+   */
+  async function runExportMultiSize(): Promise<void> {
+    if (exporting.value) return
+    exportError.value = ''
+    exportSuccess.value = ''
+
+    if (!cfg.export.dir) {
+      exportError.value = '请先选择输出目录'
+      return
+    }
+    if (!text.value.trim()) {
+      exportError.value = '没有可导出的页面，请先输入文本'
+      return
+    }
+    if (cfg.channel.sizes.length === 0) {
+      exportError.value = '请先勾选至少一个目标尺寸'
+      return
+    }
+
+    exporting.value = true
+    cancelRequested = false
+    exportDone.value = 0
+    exportPhase.value = '准备多尺寸导出'
+
+    try {
+      await waitForFonts()
+      const m = getMetrics()
+      m.reset()
+
+      // 先把各尺寸的布局全部算完（core 层纯计算），拿到总张数后再统一导出
+      const jobs: Array<{
+        size: ExportSizeEntry
+        cfg: StyleConfig
+        pages: Page[]
+        geo: Geometry
+      }> = []
+      for (const size of cfg.channel.sizes) {
+        const variant = JSON.parse(JSON.stringify(cfg)) as StyleConfig
+        variant.canvas.preset = 'custom'
+        variant.canvas.width = size.width
+        variant.canvas.height = size.height
+        const out = buildLayout(text.value, variant, m)
+        if (out.pages.length > 0) {
+          jobs.push({ size, cfg: variant, pages: out.pages, geo: out.geometry })
+        }
+      }
+      if (jobs.length === 0) {
+        throw new Error('没有可导出的页面，请先输入文本')
+      }
+
+      const bgSource = renderCtx.value.background
+      exportTotal.value = jobs.reduce((sum, j) => sum + j.pages.length, 0)
+
+      let done = 0
+      let exported = 0
+      let cancelled = false
+      let firstOutDir = ''
+
+      for (const job of jobs) {
+        if (cancelRequested) {
+          cancelled = true
+          break
+        }
+        const rc: RenderContext = {
+          cfg: job.cfg,
+          geo: job.geo,
+          background: bgSource,
+          coverImages: coverImages.value,
+          overlayImages: overlayImages.value,
+        }
+        const outDir = resolveOutDir(job.size.label)
+        const result = await exportPages({
+          pages: job.pages,
+          rc,
+          renderer: getExportRenderer(),
+          onProgress: (p) => {
+            exportDone.value = done + p.done
+            exportPhase.value = `${job.size.label} · ${p.phase}`
+          },
+          shouldCancel: () => cancelRequested,
+          labels: { size: job.size.label },
+          dirOverride: outDir,
+        })
+        done += job.pages.length
+        exported += result.files.length
+        if (!firstOutDir && result.outDir) firstOutDir = result.outDir
+        if (result.cancelled) {
+          cancelled = true
+          break
+        }
+      }
+
+      exportDone.value = done
+      if (cancelled) {
+        exportSuccess.value = `已取消，成功导出 ${exported} 张`
+      } else {
+        exportSuccess.value = `多尺寸导出完成：${jobs.length} 组共 ${exported} 张，输出于 ${firstOutDir || cfg.export.dir}`
+        recordHistory(exported, firstOutDir || cfg.export.dir, jobs.map((j) => j.size.label).join('+'))
+      }
+    } catch (e) {
+      exportError.value = e instanceof Error ? e.message : '多尺寸导出失败'
     } finally {
       exporting.value = false
       exportPhase.value = ''
@@ -778,6 +977,160 @@ export const useAppStore = defineStore('app', () => {
     } catch (e) {
       exportError.value = e instanceof Error ? e.message : '导出失败'
     }
+  }
+
+  // ------------------------------------------------------------ 引导元素图层（N-03）
+
+  /** 新增一个文字条引导元素（CTA / 账号名等）。 */
+  function addOverlayText(): void {
+    if (cfg.overlay.items.length >= MAX_OVERLAY_ITEMS) {
+      layoutMessage.value = `最多 ${MAX_OVERLAY_ITEMS} 个引导元素`
+      return
+    }
+    cfg.overlay.items.push(defaultOverlayTextItem())
+  }
+
+  /** 新增一个图片引导元素（二维码 / logo / 水印），弹出选图。 */
+  async function addOverlayImage(): Promise<void> {
+    if (cfg.overlay.items.length >= MAX_OVERLAY_ITEMS) {
+      layoutMessage.value = `最多 ${MAX_OVERLAY_ITEMS} 个引导元素`
+      return
+    }
+    let path = ''
+    try {
+      path = await api.pickImage()
+    } catch (e) {
+      exportError.value = e instanceof Error ? e.message : '打开图片选择对话框失败'
+      return
+    }
+    if (!path) return
+
+    const info = await api.probeImage(path)
+    if (!info) {
+      layoutMessage.value = '无法识别的图片格式'
+      return
+    }
+    const item = defaultOverlayImageItem()
+    item.path = path
+    item.name = info.name
+    cfg.overlay.items.push(item)
+    await ensureOverlayImage(path)
+    scheduleRebuild(0)
+  }
+
+  function removeOverlay(id: string): void {
+    const idx = cfg.overlay.items.findIndex((it) => it.id === id)
+    if (idx < 0) return
+    cfg.overlay.items.splice(idx, 1)
+    pruneOverlayImages()
+    scheduleRebuild(0)
+  }
+
+  // ------------------------------------------------------------ 历史任务存档（N-06）
+
+  const HISTORY_STORAGE_KEY = 'textweave.history.v1'
+  const HISTORY_LIMIT = 20
+  const HISTORY_TEXT_LIMIT = 20000
+
+  /** 一条历史快照：恢复一次导出所需的全部信息 */
+  interface HistoryEntry {
+    id: string
+    /** 导出时间戳（毫秒） */
+    ts: number
+    /** 导出张数 */
+    pages: number
+    /** 尺寸标签（多尺寸导出时为组合名） */
+    sizeLabel: string
+    /** 实际输出目录 */
+    outDir: string
+    /** 任务书名 */
+    book: string
+    /** 渠道名 */
+    channel: string
+    /** 正文文本（截断存档） */
+    text: string
+    /** 背景图路径 */
+    bgPath: string
+    bgName: string
+    /** 完整配置快照（含路径，本机数据） */
+    config: StyleConfig
+  }
+
+  const exportHistory = ref<HistoryEntry[]>(loadHistory())
+
+  function loadHistory(): HistoryEntry[] {
+    try {
+      const raw = localStorage.getItem(HISTORY_STORAGE_KEY)
+      if (!raw) return []
+      const list = JSON.parse(raw)
+      if (!Array.isArray(list)) return []
+      return list.slice(0, HISTORY_LIMIT)
+    } catch {
+      return []
+    }
+  }
+
+  function persistHistory(): void {
+    try {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(exportHistory.value))
+    } catch {
+      // 配额不足等情况忽略，不影响导出主流程
+    }
+  }
+
+  /** 导出成功后记录一条快照（供「历史任务」一键复现）。 */
+  function recordHistory(pages: number, outDir: string, sizeLabel = ''): void {
+    const entry: HistoryEntry = {
+      id: `his-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      ts: Date.now(),
+      pages,
+      sizeLabel,
+      outDir,
+      book: cfg.export.book,
+      channel: cfg.channel.name,
+      text: text.value.slice(0, HISTORY_TEXT_LIMIT),
+      bgPath: bgPath.value,
+      bgName: bgName.value,
+      // 快照含封面图/字体路径：本机数据，复现时免去重选
+      config: sanitizeConfig(JSON.parse(JSON.stringify(cfg)), { keepLocalPaths: true }),
+    }
+    // 同一分钟内的重复导出不重复记录（微调重导场景）
+    const dup = exportHistory.value.find(
+      (h) => h.text === entry.text && h.bgPath === entry.bgPath && entry.ts - h.ts < 60_000,
+    )
+    if (dup) return
+    exportHistory.value = [entry, ...exportHistory.value].slice(0, HISTORY_LIMIT)
+    persistHistory()
+  }
+
+  /** 恢复一条历史快照：配置 + 文本 + 背景图一并回到工作区。 */
+  async function restoreHistory(id: string): Promise<void> {
+    const entry = exportHistory.value.find((h) => h.id === id)
+    if (!entry) return
+    mergeConfig(JSON.parse(JSON.stringify(entry.config)))
+    text.value = entry.text
+    if (entry.bgPath) {
+      await setBackground(entry.bgPath)
+    } else {
+      scheduleRebuild(0)
+    }
+    exportSuccess.value = `已恢复历史任务（${formatTime(entry.ts)}），请核对后导出`
+  }
+
+  function removeHistory(id: string): void {
+    exportHistory.value = exportHistory.value.filter((h) => h.id !== id)
+    persistHistory()
+  }
+
+  function clearHistory(): void {
+    exportHistory.value = []
+    persistHistory()
+  }
+
+  function formatTime(ts: number): string {
+    const d = new Date(ts)
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${d.getMonth() + 1}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
   }
 
   // ------------------------------------------------------------ 字体管理
@@ -983,8 +1336,19 @@ export const useAppStore = defineStore('app', () => {
     switchMaskType,
     chooseOutputDir,
     runExport,
+    runExportMultiSize,
     cancelExport,
     runExportCurrent,
+    // 引导元素（N-03）
+    overlayImages,
+    addOverlayText,
+    addOverlayImage,
+    removeOverlay,
+    // 历史任务（N-06）
+    exportHistory,
+    restoreHistory,
+    removeHistory,
+    clearHistory,
     chooseAndImportFont,
     deleteFont,
     selectFont,

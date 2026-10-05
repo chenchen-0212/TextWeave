@@ -13,7 +13,7 @@
   "info": {
     "companyName": "TextWeave",
     "productName": "文织 TextWeave",
-    "productVersion": "0.2.0",
+    "productVersion": "0.3.0",
     "copyright": "Copyright © 2026 TextWeave",
     "comments": "长文自动切段，渲染到自有背景图，批量产出系列图文"
   }

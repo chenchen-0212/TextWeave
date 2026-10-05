@@ -17,6 +17,9 @@ dist/
 # NSIS 打包时下载的 WebView2 引导程序
 build/windows/installer/tmp/
 
+# 构建与测试的临时日志（根目录下 _*.txt）
+/_*.txt
+
 # 编辑器与系统
 .idea/
 .vscode/

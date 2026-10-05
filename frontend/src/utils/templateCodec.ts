@@ -13,6 +13,8 @@ import type {
 } from '../types'
 import {
   MAX_COVERS,
+  MAX_EXPORT_SIZES,
+  MAX_OVERLAY_ITEMS,
   SHARE_CODE_PREFIX,
   SHARE_PAYLOAD_VERSION,
   defaultConfig,
@@ -220,9 +222,118 @@ export function sanitizeConfig(
     filenameTemplate: str(ex.filenameTemplate, d.export.filenameTemplate, 120),
     alsoZip: bool(ex.alsoZip, d.export.alsoZip),
     pad: int(ex.pad, d.export.pad, 1, 5),
+    book: str(ex.book, '', 60),
   }
 
-  return { canvas, background, mask, text, cover, constraint, export: exportCfg }
+  // 渠道节（v3 起随分享码传输）。兼容旧版 config.json：channel 字段曾挂在 export 下，
+  // 迁移时作为缺失字段的回退来源。
+  const cn = obj(src.channel)
+  const legacyChannel = str(ex.channel, '', 60)
+  const legacySubfolder = str(ex.subfolderPattern, '', 120)
+  const channel: StyleConfig['channel'] = {
+    name: str(cn.name, legacyChannel, 60),
+    subfolderPattern: str(cn.subfolderPattern, legacySubfolder || d.channel.subfolderPattern, 120),
+    sizes: sanitizeExportSizes(Array.isArray(cn.sizes) && cn.sizes.length > 0 ? cn.sizes : ex.sizes),
+  }
+
+  const overlay = sanitizeOverlay(src.overlay, keepPaths)
+
+  return {
+    canvas,
+    background,
+    mask,
+    text,
+    cover,
+    constraint,
+    export: exportCfg,
+    channel,
+    overlay,
+  }
+}
+
+/** 净化多尺寸导出列表：逐项校验区间、按 id 去重、限量，非法输入整条丢弃。 */
+function sanitizeExportSizes(raw: unknown): StyleConfig['channel']['sizes'] {
+  if (!Array.isArray(raw)) return []
+  const seen = new Set<string>()
+  const out: StyleConfig['channel']['sizes'] = []
+  for (const item of raw.slice(0, MAX_EXPORT_SIZES * 2)) {
+    if (out.length >= MAX_EXPORT_SIZES) break
+    const it = obj(item)
+    const id = str(it.id, '', 60)
+    const width = int(it.width, 0, 200, 8000)
+    const height = int(it.height, 0, 200, 8000)
+    if (!id || seen.has(id) || width < 200 || height < 200) continue
+    seen.add(id)
+    out.push({ id, label: str(it.label, id, 40) || id, width, height })
+  }
+  return out
+}
+
+/** 九宫格锚点合法值（与 types 的 OVERLAY_ANCHORS 保持一致） */
+const OVERLAY_ANCHOR_VALUES = [
+  'top-left', 'top-center', 'top-right',
+  'middle-left', 'middle-center', 'middle-right',
+  'bottom-left', 'bottom-center', 'bottom-right',
+] as const
+
+/** 生成引导元素 id（净化可能把原 id 裁坏，需要兜底） */
+function overlayId(rawId: unknown): string {
+  return str(rawId, '', 60) || `ovl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+}
+
+/**
+ * 净化引导元素列表（N-03）。
+ *
+ * 图片路径是本机资源：只在处理本机数据时保留，外部导入一律剥离，
+ * 剥离后 path 为空的图片元素视为无效整条丢弃（渲染无意义）。
+ */
+function sanitizeOverlay(raw: unknown, keepPaths: boolean): StyleConfig['overlay'] {
+  const o = obj(raw)
+  const list = Array.isArray(o.items) ? o.items : []
+  const items: StyleConfig['overlay']['items'] = []
+
+  for (const entry of list.slice(0, MAX_OVERLAY_ITEMS)) {
+    const it = obj(entry)
+    const base = {
+      id: overlayId(it.id),
+      enabled: bool(it.enabled, true),
+      anchor: pick(it.anchor, OVERLAY_ANCHOR_VALUES, 'bottom-center' as const),
+      marginX: int(it.marginX, 96, 0, 2000),
+      marginY: int(it.marginY, 96, 0, 2000),
+      onCover: bool(it.onCover, false),
+    }
+
+    if (it.kind === 'text' || it.kind === undefined) {
+      // barColor 允许空串（无底条），非法颜色一律回退为空
+      const bar = color(it.barColor, '')
+      items.push({
+        ...base,
+        kind: 'text',
+        text: str(it.text, '', 200),
+        fontSize: int(it.fontSize, 34, 10, 200),
+        fontWeight: pick(it.fontWeight, [300, 400, 500, 700] as const, 500),
+        color: color(it.color, '#FFFFFF'),
+        barColor: bar,
+        barAlpha: num(it.barAlpha, 0.45, 0, 1),
+      })
+      continue
+    }
+
+    if (it.kind === 'image') {
+      const path = keepPaths ? str(it.path, '', 500) : ''
+      if (!path) continue
+      items.push({
+        ...base,
+        kind: 'image',
+        path,
+        name: str(it.name, '', 120),
+        height: int(it.height, 120, 16, 1000),
+        opacity: num(it.opacity, 1, 0, 1),
+      })
+    }
+  }
+
+  return { items }
 }
 
 /**
@@ -625,6 +736,11 @@ function configToArray(cfg: StyleConfig): unknown[] {
 
     encodeMask(cfg.mask),
     cfg.cover.items.map(encodeCover),
+
+    // ---- v3 追加：渠道节（O-03）。追加在尾部，旧版解码器按自身长度校验拒绝或忽略
+    str(cfg.channel.name, '', 60),
+    str(cfg.channel.subfolderPattern, '', 120),
+    cfg.channel.sizes.map((s) => [s.id, s.label, r0(s.width), r0(s.height)]),
   ]
 }
 
@@ -681,6 +797,25 @@ function v2ArrayToConfig(arr: unknown[]): Record<string, unknown> {
       alsoZip: at(32) === 1,
       pad: at(33),
     },
+  }
+}
+
+/** v3 位置数组 → 配置对象（在 v2 基础上尾部追加渠道节） */
+function v3ArrayToConfig(arr: unknown[]): Record<string, unknown> {
+  const base = v2ArrayToConfig(arr)
+  const rawSizes = Array.isArray(arr[38]) ? (arr[38] as unknown[]) : []
+
+  return {
+    ...base,
+    channel: {
+      name: arr[36],
+      subfolderPattern: arr[37],
+      sizes: rawSizes.map((s) => {
+        const e = Array.isArray(s) ? (s as unknown[]) : []
+        return { id: e[0], label: e[1], width: e[2], height: e[3] }
+      }),
+    },
+    // overlay 含本机路径，不进分享码；缺失时 sanitizeConfig 补默认空列表
   }
 }
 
@@ -756,6 +891,7 @@ function legacyV1ArrayToConfig(arr: unknown[]): Record<string, unknown> {
  */
 const ARRAY_MIN_LENGTH_V1 = 43
 const ARRAY_MIN_LENGTH_V2 = 36
+const ARRAY_MIN_LENGTH_V3 = 39
 
 // ---------------------------------------------------------------- Base64URL
 
@@ -854,15 +990,17 @@ function decodeShareCode(code: string): DecodedTemplate {
     )
   }
 
-  // 按版本选择长度下限与解码分支：v1 与 v2 的字段索引完全不同
-  const minLength = version >= 2 ? ARRAY_MIN_LENGTH_V2 : ARRAY_MIN_LENGTH_V1
+  // 按版本选择长度下限与解码分支：v1 / v2 / v3 的字段索引不同（v3 是 v2 的尾部追加）
+  const minLength =
+    version >= 3 ? ARRAY_MIN_LENGTH_V3 : version >= 2 ? ARRAY_MIN_LENGTH_V2 : ARRAY_MIN_LENGTH_V1
   if (arr.length < minLength) {
     throw new Error(
       `分享码字段数量不足（${arr.length} < ${minLength}），可能来自不兼容的版本`,
     )
   }
 
-  const raw = version >= 2 ? v2ArrayToConfig(arr) : legacyV1ArrayToConfig(arr)
+  const raw =
+    version >= 3 ? v3ArrayToConfig(arr) : version >= 2 ? v2ArrayToConfig(arr) : legacyV1ArrayToConfig(arr)
 
   return {
     name: str(name, '未命名模板', 60) || '未命名模板',

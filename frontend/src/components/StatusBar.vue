@@ -59,6 +59,6 @@ const pyLabel = computed(() => {
       <i class="dot" :class="store.py?.available ? 'ok' : 'off'"></i>{{ pyLabel }}
     </span>
     <i class="sep"></i>
-    <span class="mono">v{{ store.appVersion || '0.2.0' }}</span>
+    <span class="mono">v{{ store.appVersion || '0.3.0' }}</span>
   </footer>
 </template>

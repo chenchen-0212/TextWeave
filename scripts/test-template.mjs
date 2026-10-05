@@ -91,8 +91,12 @@ function check(name, ok, detail) {
 function normalize(cfg) {
   const c = JSON.parse(JSON.stringify(cfg))
   c.export.dir = ''
+  c.export.book = ''
   c.text.fontPath = ''
   c.cover.activeId = ''
+  // 渠道节自 v3 起随分享码传输，参与往返比较，不再剔除。
+  // 引导元素（overlay）含本机图片路径，与输出目录同策略，不进分享码。
+  c.overlay = { items: [] }
   for (const item of c.cover.items) {
     // 封面 id 是本地标识，导入时重新生成
     item.id = ''
@@ -848,6 +852,65 @@ function testLength() {
   }
 }
 
+/** I. 渠道节与引导元素（v3 新增能力的净化与迁移） */
+function testChannelAndOverlay() {
+  console.log('\nI. 渠道节与引导元素（v3）')
+
+  // 渠道节随分享码 v3 往返
+  const cfg = makeConfig((c) => {
+    c.channel.name = '抖音信息流'
+    c.channel.subfolderPattern = '{book}/{channel}'
+    c.channel.sizes = [{ id: 'ch-9x16', label: '抖音快手 9:16', width: 1080, height: 1920 }]
+  })
+  const decoded = decodeSharePayload(encodeShareCode(cfg, '渠道包'))
+  check('渠道名随分享码还原', decoded.config.channel.name === '抖音信息流', decoded.config.channel.name)
+  check('子目录模板还原', decoded.config.channel.subfolderPattern === '{book}/{channel}', decoded.config.channel.subfolderPattern)
+  check(
+    '渠道尺寸组还原',
+    decoded.config.channel.sizes.length === 1 &&
+      decoded.config.channel.sizes[0].width === 1080 &&
+      decoded.config.channel.sizes[0].label === '抖音快手 9:16',
+    JSON.stringify(decoded.config.channel.sizes),
+  )
+
+  // 旧版 config.json 的渠道字段挂在 export 下 → 迁移到 channel 节
+  const migrated = sanitizeConfig({
+    export: { channel: '小红书', subfolderPattern: '{channel}', sizes: [{ id: 'x', label: 'x', width: 1080, height: 1440 }] },
+  })
+  check('旧 export.channel 迁移到 channel.name', migrated.channel.name === '小红书', migrated.channel.name)
+  check('旧 subfolderPattern 迁移', migrated.channel.subfolderPattern === '{channel}', migrated.channel.subfolderPattern)
+  check('旧 sizes 迁移', migrated.channel.sizes.length === 1, JSON.stringify(migrated.channel.sizes))
+
+  // 引导元素：本机数据保留路径，外部导入剥离路径并丢弃空图片元素
+  const overlaySrc = {
+    overlay: {
+      items: [
+        { kind: 'text', text: '点击下方链接', anchor: 'bottom-center', marginX: 96, marginY: 96 },
+        { kind: 'image', path: 'D:\\pics\\qr.png', name: 'qr.png', height: 120, opacity: 0.9, onCover: true },
+      ],
+    },
+  }
+  const kept = sanitizeConfig(JSON.parse(JSON.stringify(overlaySrc)), { keepLocalPaths: true })
+  check('本机数据：文字条保留', kept.overlay.items.length === 2, String(kept.overlay.items.length))
+  check('本机数据：图片路径保留', kept.overlay.items[1].kind === 'image' && kept.overlay.items[1].path !== '', '')
+
+  const stripped = sanitizeConfig(JSON.parse(JSON.stringify(overlaySrc)))
+  check(
+    '外部导入：图片路径被剥离、元素整条丢弃，仅剩文字条',
+    stripped.overlay.items.length === 1 && stripped.overlay.items[0].kind === 'text',
+    JSON.stringify(stripped.overlay.items),
+  )
+
+  // 非法 anchor 回退、越界数值被夹紧
+  const bad = sanitizeConfig({
+    overlay: { items: [{ kind: 'text', text: 'x', anchor: 'nowhere', marginX: 99999, fontSize: 999 }] },
+  })
+  const badItem = bad.overlay.items[0]
+  check('非法 anchor 回退 bottom-center', badItem.anchor === 'bottom-center', badItem.anchor)
+  check('marginX 被夹到 2000', badItem.marginX === 2000, String(badItem.marginX))
+  check('fontSize 被夹到 200', badItem.fontSize === 200, String(badItem.fontSize))
+}
+
 // ---------------------------------------------------------------- 主流程
 
 console.log('='.repeat(64))
@@ -866,6 +929,7 @@ testAdversarial()
 testSanitize()
 testJsonPayload()
 testLength()
+testChannelAndOverlay()
 
 console.log('\n' + '='.repeat(64))
 console.log(`通过 ${passed} 项，失败 ${failed} 项`)

@@ -3,7 +3,8 @@
 
 import { computed } from 'vue'
 import { useAppStore } from '../../stores/config'
-import { extForFormat, renderFilenameTemplate } from '../../utils/filename'
+import { extForFormat, renderFilenameTemplate, renderSubfolder } from '../../utils/filename'
+import { CHANNEL_SIZES, MAX_EXPORT_SIZES } from '../../types'
 import ParamField from '../ui/ParamField.vue'
 import ParamSection from './ParamSection.vue'
 
@@ -23,10 +24,24 @@ const preview = computed(() => {
         title: store.primaryCoverTitle,
         date: new Date(),
         pad: cfg.export.pad,
+        book: cfg.export.book,
+        channel: cfg.channel.name,
+        size: cfg.channel.sizes[0]?.label,
       }) + `.${ext}`,
     )
   }
   return names.length > 0 ? names.join('  ·  ') : ''
+})
+
+/** 子目录效果预览 */
+const subfolderPreview = computed(() => {
+  const sub = renderSubfolder(cfg.channel.subfolderPattern, {
+    book: cfg.export.book,
+    channel: cfg.channel.name,
+    size: cfg.channel.sizes[0]?.label,
+    date: new Date(),
+  })
+  return sub ? `${cfg.export.dir || '<输出目录>'}/${sub}/` : cfg.export.dir || '<输出目录>'
 })
 
 const progressPercent = computed(() => {
@@ -35,6 +50,21 @@ const progressPercent = computed(() => {
 })
 
 const badge = computed(() => (cfg.export.dir ? '已设置目录' : '未设置目录'))
+
+function isSizeChecked(id: string): boolean {
+  return cfg.channel.sizes.some((s) => s.id === id)
+}
+
+function toggleSize(id: string, checked: boolean): void {
+  const list = cfg.channel.sizes
+  if (checked) {
+    if (list.some((s) => s.id === id)) return
+    const hit = CHANNEL_SIZES.find((s) => s.id === id)
+    if (hit && list.length < MAX_EXPORT_SIZES) list.push({ ...hit })
+  } else {
+    cfg.channel.sizes = list.filter((s) => s.id !== id)
+  }
+}
 </script>
 
 <template>
@@ -62,6 +92,31 @@ const badge = computed(() => (cfg.export.dir ? '已设置目录' : '未设置目
     </div>
 
     <ParamField
+      label="书名标签"
+      type="text"
+      :modelValue="cfg.export.book"
+      placeholder="例：断桥残雪"
+      @update:modelValue="(v) => (cfg.export.book = String(v))"
+    />
+    <ParamField
+      label="渠道标签"
+      type="text"
+      :modelValue="cfg.channel.name"
+      placeholder="例：抖音信息流"
+      @update:modelValue="(v) => (cfg.channel.name = String(v))"
+    />
+    <ParamField
+      label="子目录模板"
+      type="text"
+      :modelValue="cfg.channel.subfolderPattern"
+      placeholder="{book}/{channel}"
+      @update:modelValue="(v) => (cfg.channel.subfolderPattern = String(v))"
+    />
+    <div class="field-hint">
+      按 / 分层自动建子目录，空段丢弃；留空则直接输出到根目录。当前效果：{{ subfolderPreview }}
+    </div>
+
+    <ParamField
       label="文件名模板"
       type="text"
       :modelValue="cfg.export.filenameTemplate"
@@ -86,7 +141,26 @@ const badge = computed(() => (cfg.export.dir ? '已设置目录' : '未设置目
     />
 
     <div class="field-hint">
-      支持变量：{index} 序号、{total} 总张数、{title} 封面标题、{date} 日期。默认逐张落盘，中断后已导出的文件仍然可用。
+      支持变量：{index} 序号、{total} 总张数、{title} 封面标题、{date} 日期、{book} 书名、{channel} 渠道、{size} 尺寸。默认逐张落盘，中断后已导出的文件仍然可用。
+    </div>
+
+    <div class="field-stack">
+      <div class="field-label wide">多尺寸导出</div>
+      <label v-for="size in CHANNEL_SIZES" :key="size.id" class="check-row">
+        <input
+          type="checkbox"
+          :checked="isSizeChecked(size.id)"
+          @change="toggleSize(size.id, ($event.target as HTMLInputElement).checked)"
+        />
+        <span>{{ size.label }}（{{ size.width }}×{{ size.height }}）</span>
+      </label>
+      <div class="field-hint" style="margin-left: 0">
+        勾选后一次导出多个渠道尺寸；每种尺寸按自身画布独立重排，张数可以不同。
+      </div>
+    </div>
+
+    <div class="field-hint">
+      渠道标签与多尺寸选择会随「存为模板」一起保存，形成渠道模板包（含视觉参数），可直接分享给团队。
     </div>
 
     <div v-if="store.exporting" class="mt8">
@@ -119,5 +193,13 @@ const badge = computed(() => (cfg.export.dir ? '已设置目录' : '未设置目
         仅当前页
       </button>
     </div>
+    <button
+      class="btn primary grow mt8"
+      type="button"
+      :disabled="store.exporting || !store.hasContent || cfg.channel.sizes.length === 0"
+      @click="store.runExportMultiSize()"
+    >
+      多尺寸导出（{{ cfg.channel.sizes.length }} 组）
+    </button>
   </ParamSection>
 </template>

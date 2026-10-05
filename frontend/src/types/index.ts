@@ -196,13 +196,156 @@ export interface ConstraintConfig {
 
 export interface ExportConfig {
   dir: string
-  /** 支持 {index} {total} {title} {date} */
+  /** 支持 {index} {total} {title} {date} {book} {channel} {size} */
   filenameTemplate: string
   /** 导出完成后附加打包一份 zip */
   alsoZip: boolean
   /** 文件名序号补零位数 */
   pad: number
+  /** 任务标签：书名（进入 {book} 变量与子目录） */
+  book: string
 }
+
+// ------------------------------------------------------------------ 渠道（O-03 渠道模板包）
+
+/**
+ * 渠道特征配置。
+ *
+ * 与「视觉模板」相对：这里描述的是"素材为哪个渠道、以什么规格产出"。
+ * 随模板一起分享（分享码 v3 承载），应用渠道模板包即同时获得视觉与规格。
+ */
+export interface ChannelConfig {
+  /** 渠道名标签，进入 {channel} 变量与子目录 */
+  name: string
+  /**
+   * 导出子目录模板，空串表示不建子目录。
+   * 支持 {book} {channel} {size} {date}，按 / 分层，空段自动丢弃。
+   */
+  subfolderPattern: string
+  /** 多尺寸导出勾选的目标尺寸 */
+  sizes: ExportSizeEntry[]
+}
+
+// ------------------------------------------------------------------ 引导元素图层（N-03）
+
+export type OverlayAnchor =
+  | 'top-left' | 'top-center' | 'top-right'
+  | 'middle-left' | 'middle-center' | 'middle-right'
+  | 'bottom-left' | 'bottom-center' | 'bottom-right'
+
+/** 九宫格锚点选项（附带中文标签供界面使用） */
+export const OVERLAY_ANCHORS: ReadonlyArray<{ value: OverlayAnchor; label: string }> = [
+  { value: 'top-left', label: '上左' },
+  { value: 'top-center', label: '上中' },
+  { value: 'top-right', label: '上右' },
+  { value: 'middle-left', label: '中左' },
+  { value: 'middle-center', label: '正中' },
+  { value: 'middle-right', label: '中右' },
+  { value: 'bottom-left', label: '下左' },
+  { value: 'bottom-center', label: '下中' },
+  { value: 'bottom-right', label: '下右' },
+]
+
+interface OverlayItemBase {
+  id: string
+  enabled: boolean
+  anchor: OverlayAnchor
+  /** 距锚定边的水平边距（逻辑 px） */
+  marginX: number
+  /** 距锚定边的垂直边距（逻辑 px） */
+  marginY: number
+  /** 是否也绘制在封面页上 */
+  onCover: boolean
+}
+
+/** 文字条引导元素：CTA 语、账号名等，可带半透明底条 */
+export interface OverlayTextItem extends OverlayItemBase {
+  kind: 'text'
+  text: string
+  fontSize: number
+  fontWeight: number
+  color: string
+  /** 底条颜色；空串表示无底条 */
+  barColor: string
+  /** 底条不透明度 0~1，barColor 为空时无效 */
+  barAlpha: number
+}
+
+/** 图片引导元素：二维码、logo、水印等（本机路径，不参与分享） */
+export interface OverlayImageItem extends OverlayItemBase {
+  kind: 'image'
+  /** 本机绝对路径，不参与分享与模板导出 */
+  path: string
+  /** 仅用于界面展示 */
+  name: string
+  /** 显示高度（逻辑 px），宽度按原图比例换算 */
+  height: number
+  /** 不透明度 0~1 */
+  opacity: number
+}
+
+export type OverlayItem = OverlayTextItem | OverlayImageItem
+
+export interface OverlayConfig {
+  items: OverlayItem[]
+}
+
+/** 引导元素数量上限 */
+export const MAX_OVERLAY_ITEMS = 12
+
+export function defaultOverlayTextItem(): OverlayTextItem {
+  return {
+    id: `ovl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    enabled: true,
+    kind: 'text',
+    text: '点击下方链接看后续',
+    fontSize: 34,
+    fontWeight: 500,
+    color: '#FFFFFF',
+    barColor: '#000000',
+    barAlpha: 0.45,
+    anchor: 'bottom-center',
+    marginX: 96,
+    marginY: 96,
+    onCover: false,
+  }
+}
+
+export function defaultOverlayImageItem(): OverlayImageItem {
+  return {
+    id: `ovl-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    enabled: true,
+    kind: 'image',
+    path: '',
+    name: '',
+    height: 120,
+    opacity: 1,
+    anchor: 'top-right',
+    marginX: 48,
+    marginY: 48,
+    onCover: true,
+  }
+}
+
+/** 多尺寸导出的一个目标尺寸（渠道适配） */
+export interface ExportSizeEntry {
+  id: string
+  /** 展示名，也用作 {size} 变量与子目录名，如「小红书 3:4」 */
+  label: string
+  width: number
+  height: number
+}
+
+/** 常用渠道尺寸。多尺寸导出时按勾选项逐一独立重排（各尺寸张数可不同）。 */
+export const CHANNEL_SIZES: ExportSizeEntry[] = [
+  { id: 'ch-9x16', label: '抖音快手 9:16', width: 1080, height: 1920 },
+  { id: 'ch-3x4', label: '小红书 3:4', width: 1080, height: 1440 },
+  { id: 'ch-1x1', label: '通用方图 1:1', width: 1080, height: 1080 },
+  { id: 'ch-16x9', label: '横屏 16:9', width: 1920, height: 1080 },
+]
+
+/** 多尺寸导出单次勾选上限 */
+export const MAX_EXPORT_SIZES = 8
 
 // ------------------------------------------------------------------ 顶层配置
 
@@ -214,6 +357,10 @@ export interface StyleConfig {
   cover: CoverSet
   constraint: ConstraintConfig
   export: ExportConfig
+  /** 渠道特征（O-03：随渠道模板包一起分享） */
+  channel: ChannelConfig
+  /** 引导元素图层（N-03） */
+  overlay: OverlayConfig
 }
 
 // ------------------------------------------------------------------ 布局树（core 层产出）
@@ -520,6 +667,15 @@ export function defaultConfig(): StyleConfig {
       filenameTemplate: '{index}',
       alsoZip: false,
       pad: 2,
+      book: '',
+    },
+    channel: {
+      name: '',
+      subfolderPattern: '{book}',
+      sizes: [],
+    },
+    overlay: {
+      items: [],
     },
   }
 }
@@ -564,9 +720,11 @@ export const SHARE_CODE_PREFIX = 'TW1-'
  * 分享载荷版本。
  *  v1 —— 单封面结构（cover.enable / title / ...）
  *  v2 —— 封面集合结构（cover.items[]，每张封面带独立背景）
+ *  v3 —— 新增渠道节（channel.name / subfolderPattern / sizes，O-03 渠道模板包）。
+ *        引导元素（overlay）含本机图片路径，**不进分享码**，与输出目录同策略。
  * 解码端必须保留旧版分支，否则老分享码会解出一堆错位的值。
  */
-export const SHARE_PAYLOAD_VERSION = 2
+export const SHARE_PAYLOAD_VERSION = 3
 
 /** 封面数量上限 */
 export const MAX_COVERS = 20

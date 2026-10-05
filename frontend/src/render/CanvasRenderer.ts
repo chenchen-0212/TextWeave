@@ -8,6 +8,7 @@ import {
 } from './background'
 import { drawMask } from './masks'
 import { drawContentText, drawCoverText } from './textPainter'
+import { drawOverlays } from './overlay'
 
 /**
  * Canvas 合成器（渲染管线第 ⑦ 步）。
@@ -29,6 +30,8 @@ export interface RenderContext {
   background: BackgroundSource | null
   /** 封面专属背景图缓存，key 为文件绝对路径 */
   coverImages?: Map<string, BackgroundSource>
+  /** 引导元素图片缓存，key 为文件绝对路径 */
+  overlayImages?: Map<string, BackgroundSource>
 }
 
 export class CanvasRenderer {
@@ -174,6 +177,10 @@ export class CanvasRenderer {
     } else {
       drawContentText(ctx, page, cfg, geo)
     }
+
+    // 5) 引导元素图层（N-03）：在正文文字之上，全页位置一致。
+    //    测量用默认回调：drawTextItem 自身会先设置与元素一致的 font 再测量。
+    drawOverlays(ctx, cfg, page.kind, rc.overlayImages)
 
     ctx.setTransform(1, 0, 0, 1, 0, 0)
   }

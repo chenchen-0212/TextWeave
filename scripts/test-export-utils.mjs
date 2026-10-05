@@ -46,7 +46,17 @@ function compile() {
   }
 
   try {
-    execFileSync(process.execPath, [tscEntry, ...args], { cwd: FRONTEND, stdio: 'pipe' })
+    try {
+      execFileSync(process.execPath, [tscEntry, ...args], { cwd: FRONTEND, stdio: 'pipe' })
+    } catch (e) {
+      // 某些运行环境下 pipe 模式的子进程会被无信号终止（无退出码、无输出），
+      // 这类情况改用继承模式重试一次，真实编译错误仍会照常抛出。
+      if (e && (e.status === null || e.status === undefined)) {
+        execFileSync(process.execPath, [tscEntry, ...args], { cwd: FRONTEND, stdio: 'inherit' })
+      } else {
+        throw e
+      }
+    }
   } catch (e) {
     const out = String(e.stdout || '') + String(e.stderr || '')
     console.error('导出工具编译失败：\n' + out)

@@ -4,6 +4,7 @@ import type {
   CoverBackground,
   CoverItem,
   CoverSet,
+  CoverTextElement,
   GradientMask,
   MaskConfig,
   MaskType,
@@ -13,14 +14,18 @@ import type {
 } from '../types'
 import {
   MAX_COVERS,
+  MAX_COVER_TEXTS,
   MAX_EXPORT_SIZES,
   MAX_OVERLAY_ITEMS,
   SHARE_CODE_PREFIX,
   SHARE_PAYLOAD_VERSION,
   defaultConfig,
   defaultCoverBackground,
+  defaultCoverCanvas,
   defaultCoverItem,
   defaultCoverMask,
+  defaultCoverText,
+  defaultCoverTextMask,
   defaultMaskOfType,
 } from '../types'
 
@@ -52,6 +57,12 @@ const MASK_TYPE: EnumMap = { card: 'c', veil: 'v', gradient: 'g' }
 const GRADIENT_DIR: EnumMap = { top: 't', bottom: 'b', both: 'x' }
 const CARD_POS: EnumMap = { stretchToFill: 's', center: 'c', top: 't', bottom: 'b' }
 const COVER_LAYOUT: EnumMap = { center: 'c', top: 't', bottom: 'b' }
+/** 封面文本水平对齐（v4 新增） */
+const COVER_TEXT_ALIGN: EnumMap = { left: 'l', center: 'c', right: 'r' }
+/** 尺寸单位（v5 新增） */
+const SIZE_UNIT: EnumMap = { px: 'p', mm: 'm', cm: 'c', in: 'i' }
+/** 朝向（v5 新增） */
+const ORIENTATION: EnumMap = { auto: 'a', portrait: 'p', landscape: 'l', square: 's' }
 const FONT_SOURCE: EnumMap = { system: 's', user: 'u' }
 const BLEND: EnumMap = {
   normal: 'n',
@@ -236,10 +247,15 @@ export function sanitizeConfig(
     sizes: sanitizeExportSizes(Array.isArray(cn.sizes) && cn.sizes.length > 0 ? cn.sizes : ex.sizes),
   }
 
+  // 封面画布（v0.5 追加的独立字段）。旧数据无此节 → followBody=true，
+  // 即封面跟随正文，与解耦前的行为完全一致。
+  const coverCanvas = sanitizeCoverCanvas(src.coverCanvas)
+
   const overlay = sanitizeOverlay(src.overlay, keepPaths)
 
   return {
     canvas,
+    coverCanvas,
     background,
     mask,
     text,
@@ -248,6 +264,20 @@ export function sanitizeConfig(
     export: exportCfg,
     channel,
     overlay,
+  }
+}
+
+/** 净化封面画布：单位/朝向走白名单，宽高先夹区间再由 resolveCoverCanvas 做像素夹取 */
+function sanitizeCoverCanvas(raw: unknown): StyleConfig['coverCanvas'] {
+  const d = defaultCoverCanvas()
+  const o = obj(raw)
+  return {
+    width: num(o.width, d.width, 1, 100000),
+    height: num(o.height, d.height, 1, 100000),
+    unit: pick(o.unit, ['px', 'mm', 'cm', 'in'] as const, d.unit),
+    orientation: pick(o.orientation, ['auto', 'portrait', 'landscape', 'square'] as const, d.orientation),
+    // 默认 true：未显式开启「独立尺寸」的旧数据一律跟随正文
+    followBody: bool(o.followBody, true),
   }
 }
 
@@ -434,23 +464,87 @@ function sanitizeCoverBackground(raw: unknown, keepPaths: boolean): CoverBackgro
   }
 }
 
+/**
+ * 净化单个封面，并把 v0.3.x 的 title/subtitle 标量迁移为文本元素。
+ *
+ * 迁移规则（v0.4.0）：
+ *  - `title` → `texts[0]`，继承 titleFontSize / titleWeight / color，`placed=false`
+ *    （仍由 cover.layout 自动排布，升级后视觉不变）；
+ *  - `subtitle` **丢弃** —— 副标题能力已下线，不再迁移为第二个元素。
+ */
 function sanitizeCoverItem(raw: unknown, index: number, keepPaths: boolean): CoverItem {
   const d = defaultCoverItem(index + 1)
   const o = obj(raw)
+
+  const texts = sanitizeCoverTexts(
+    Array.isArray(o.texts)
+      ? o.texts
+      : // 旧结构：把主标题搬进第一个元素
+        [{ ...(o as Record<string, unknown>), text: o.title, legacy: true }],
+    o,
+  )
+
   return {
     id: str(o.id, d.id, 64) || d.id,
     enabled: bool(o.enabled, true),
-    title: str(o.title, d.title, 200),
-    subtitle: str(o.subtitle, d.subtitle, 200),
-    titleFontSize: int(o.titleFontSize, d.titleFontSize, 24, 300),
-    titleWeight: pick(o.titleWeight, [400, 500, 700] as const, 700),
+    texts,
     layout: pick(o.layout, ['center', 'top', 'bottom'], d.layout),
-    // 空串表示「沿用正文文字颜色」，需要与「非法颜色」区分开
-    color: typeof o.color === 'string' && o.color ? color(o.color, '') : '',
     useOwnMask: bool(o.useOwnMask, false),
     mask: sanitizeMask(o.mask, defaultCoverMask()),
     background: sanitizeCoverBackground(o.background, keepPaths),
   }
+}
+
+/** 净化封面文本元素：逐项夹取 + 限量；空数组补一个默认元素。 */
+function sanitizeCoverTexts(raw: unknown, legacy: Record<string, unknown>): CoverTextElement[] {
+  const list = Array.isArray(raw) ? raw : []
+  const out: CoverTextElement[] = []
+  const seen = new Set<string>()
+
+  for (const entry of list.slice(0, MAX_COVER_TEXTS)) {
+    if (out.length >= MAX_COVER_TEXTS) break
+    const t = obj(entry)
+    let id = str(t.id, '', 64)
+    if (!id || seen.has(id)) id = `ctext-${out.length}-${Math.random().toString(36).slice(2, 6)}`
+    seen.add(id)
+
+    // legacy 元素从封面级字段继承字号/字重/颜色
+    const isLegacy = t.legacy === true
+    out.push({
+      id,
+      enabled: bool(t.enabled, true),
+      text: str(t.text, '', 200),
+      fontSize: int(
+        isLegacy ? legacy.titleFontSize : t.fontSize,
+        isLegacy ? 96 : 96,
+        16,
+        300,
+      ),
+      fontWeight: pick(
+        isLegacy ? legacy.titleWeight : t.fontWeight,
+        [300, 400, 500, 700] as const,
+        700,
+      ),
+      color:
+        typeof (isLegacy ? legacy.color : t.color) === 'string' &&
+        (isLegacy ? legacy.color : t.color) !== ''
+          ? color(isLegacy ? legacy.color : t.color, '')
+          : '',
+      align: pick(t.align, ['left', 'center', 'right'], 'center'),
+      x: num(t.x, 0.5, 0, 1),
+      y: num(t.y, 0.5, 0, 1),
+      widthRatio: num(t.widthRatio, 0.86, 0.2, 1),
+      placed: bool(t.placed, false),
+      // 文本自带蒙版：缺失时给一份默认（且默认关闭），旧数据外观不变
+      mask: sanitizeMask(t.mask, defaultCoverTextMask()),
+      maskEnabled: bool(t.maskEnabled, false),
+      // z 缺省按数组顺序，保证旧数据的叠放次序与升级前一致
+      z: int(t.z, out.length, -MAX_COVER_TEXTS, MAX_COVER_TEXTS),
+    })
+  }
+
+  if (out.length === 0) out.push(defaultCoverText())
+  return out
 }
 
 /**
@@ -473,7 +567,7 @@ function sanitizeCoverSet(raw: unknown, keepPaths: boolean): CoverSet {
     'useDifferentMask' in r ||
     'titleFontSize' in r
   ) {
-    // v1 → v2：单封面无损迁移
+    // v1 → v4：单封面结构迁移（副标题直接丢弃，由 sanitizeCoverTexts 处理）
     items = [
       sanitizeCoverItem(
         {
@@ -587,6 +681,10 @@ function r0(v: number): number {
 function r2(v: number): number {
   return Math.round(v * 100) / 100
 }
+/** 归一化坐标保留 3 位小数：0.001 的精度对 1080 宽画布约等于 1px，肉眼不可辨但足以稳定还原。 */
+function r3(v: number): number {
+  return Math.round(v * 1000) / 1000
+}
 
 /** 截断尾部的默认值以压缩体积。解码端会按同样的默认值补齐缺失位置。 */
 function trimTrailing(arr: unknown[], defaults: unknown[]): unknown[] {
@@ -648,42 +746,107 @@ function decodeCoverBackground(raw: unknown, keepPaths: boolean): CoverBackgroun
   )
 }
 
-/** 单张封面 → 10 元数组。未启用独立蒙版时蒙版位编码为空数组以省体积。 */
+/** 单张封面 → 6 元数组（协议 v4）。未启用独立蒙版时蒙版位编码为空数组以省体积。 */
 function encodeCover(c: CoverItem): unknown[] {
+  // 防御：encodeShareCode 可能收到未经 sanitize 的外部对象
+  const texts = Array.isArray(c.texts) ? c.texts : []
   return [
     c.enabled ? 1 : 0,
-    str(c.title, '', 200),
-    str(c.subtitle, '', 200),
-    r0(c.titleFontSize),
-    r0(c.titleWeight),
+    texts.map(encodeCoverText),
     enc(COVER_LAYOUT, c.layout, 'c'),
-    c.color || '',
     c.useOwnMask ? 1 : 0,
     c.useOwnMask ? encodeMask(c.mask) : [],
     encodeCoverBackground(c.background),
   ]
 }
 
-function decodeCover(raw: unknown, index: number, keepPaths: boolean): CoverItem {
+/** 单个封面文本元素 → 紧凑数组（v4 尾部追加文本级蒙版三件套） */
+function encodeCoverText(t: CoverTextElement): unknown[] {
+  // 防御：encodeShareCode 可能收到未经 sanitize 的外部对象
+  const mask = t.mask ?? defaultCoverTextMask()
+  return [
+    t.enabled ? 1 : 0,
+    str(t.text, '', 200),
+    r0(t.fontSize),
+    r0(t.fontWeight),
+    t.color || '',
+    enc(COVER_TEXT_ALIGN, t.align, 'c'),
+    r3(t.x),
+    r3(t.y),
+    r2(t.widthRatio),
+    t.placed ? 1 : 0,
+    // ---- v4 追加：文本级蒙版 ----
+    t.maskEnabled ? 1 : 0,
+    encodeMask(mask),
+    r0(t.z),
+  ]
+}
+
+/**
+ * v4 封面 → CoverItem。
+ *
+ * `legacy` 为 true 时按 v1~v3 的旧布局解码（标题/副标题/封面级字号字重颜色），
+ * 再交给 sanitizeCoverItem 迁移成文本元素，副标题在这一步被丢弃。
+ */
+function decodeCover(raw: unknown, index: number, keepPaths: boolean, legacy = false): CoverItem {
   const d = defaultCoverItem(index + 1)
   if (!Array.isArray(raw)) return d
   const g = (i: number, def: unknown): unknown => (raw[i] === undefined ? def : raw[i])
-  const useOwnMask = g(7, 0) === 1
 
-  return {
-    // id 是本地标识，不参与传输，导入时重新生成
-    id: d.id,
-    enabled: g(0, 1) === 1,
-    title: str(g(1, d.title), d.title, 200),
-    subtitle: str(g(2, d.subtitle), d.subtitle, 200),
-    titleFontSize: int(g(3, d.titleFontSize), d.titleFontSize, 24, 300),
-    titleWeight: pick(g(4, d.titleWeight), [400, 500, 700] as const, 700),
-    layout: pick(dec(COVER_LAYOUT, g(5, 'c'), 'center'), ['center', 'top', 'bottom'], 'center'),
-    color: typeof g(6, '') === 'string' && g(6, '') ? color(g(6, ''), '') : '',
-    useOwnMask,
-    mask: useOwnMask ? decodeMask(raw[8], defaultCoverMask()) : defaultCoverMask(),
-    background: decodeCoverBackground(raw[9], keepPaths),
+  if (legacy) {
+    const useOwnMask = g(7, 0) === 1
+    return sanitizeCoverItem(
+      {
+        enabled: g(0, 1) === 1,
+        title: g(1, ''),
+        subtitle: g(2, ''),
+        titleFontSize: g(3, 96),
+        titleWeight: g(4, 700),
+        layout: dec(COVER_LAYOUT, g(5, 'c'), 'center'),
+        color: g(6, ''),
+        useOwnMask,
+        mask: useOwnMask ? decodeMask(raw[8], defaultCoverMask()) : defaultCoverMask(),
+        background: decodeCoverBackground(raw[9], keepPaths),
+      },
+      index,
+      keepPaths,
+    )
   }
+
+  const useOwnMask = g(3, 0) === 1
+  const rawTexts = Array.isArray(g(1, [])) ? (g(1, []) as unknown[]) : []
+
+  return sanitizeCoverItem(
+    {
+      id: d.id,
+      enabled: g(0, 1) === 1,
+      texts: rawTexts.map((t, i) => {
+        const e = Array.isArray(t) ? (t as unknown[]) : []
+        return {
+          enabled: e[0] === 1,
+          text: e[1],
+          fontSize: e[2],
+          fontWeight: e[3],
+          color: e[4],
+          align: dec(COVER_TEXT_ALIGN, e[5], 'center'),
+          x: e[6],
+          y: e[7],
+          widthRatio: e[8],
+          placed: e[9] === 1,
+          // 尾部三件套在早期 v4 分享码里不存在 → 交给 sanitize 补默认（蒙版关闭）
+          maskEnabled: e[10] === 1,
+          mask: decodeMask(e[11], defaultCoverTextMask()),
+          z: e[12] === undefined ? i : e[12],
+        }
+      }),
+      layout: dec(COVER_LAYOUT, g(2, 'c'), 'center'),
+      useOwnMask,
+      mask: useOwnMask ? decodeMask(raw[4], defaultCoverMask()) : defaultCoverMask(),
+      background: decodeCoverBackground(raw[5], keepPaths),
+    },
+    index,
+    keepPaths,
+  )
 }
 
 /**
@@ -741,11 +904,23 @@ function configToArray(cfg: StyleConfig): unknown[] {
     str(cfg.channel.name, '', 60),
     str(cfg.channel.subfolderPattern, '', 120),
     cfg.channel.sizes.map((s) => [s.id, s.label, r0(s.width), r0(s.height)]),
+
+    // ---- v5 追加：封面画布（与正文解耦）----
+    r0(cfg.coverCanvas.width),
+    r0(cfg.coverCanvas.height),
+    enc(SIZE_UNIT, cfg.coverCanvas.unit, 'p'),
+    enc(ORIENTATION, cfg.coverCanvas.orientation, 'p'),
+    cfg.coverCanvas.followBody ? 1 : 0,
   ]
 }
 
-/** v2 位置数组 → 配置对象 */
-function v2ArrayToConfig(arr: unknown[]): Record<string, unknown> {
+/**
+ * v2 位置数组 → 配置对象。
+ *
+ * `legacyCovers` 为 true 时按 v1~v3 的旧封面布局解码（标题/副标题/封面级样式），
+ * v4 起封面结构改为文本元素数组。
+ */
+function v2ArrayToConfig(arr: unknown[], legacyCovers = true): Record<string, unknown> {
   const at = (i: number): unknown => arr[i]
   const coverList = Array.isArray(at(35)) ? (at(35) as unknown[]) : []
 
@@ -784,7 +959,7 @@ function v2ArrayToConfig(arr: unknown[]): Record<string, unknown> {
       minOrphanLines: at(27),
     },
     cover: {
-      items: coverList.map((c, i) => decodeCover(c, i, false)),
+      items: coverList.map((c, i) => decodeCover(c, i, false, legacyCovers)),
       activeId: '',
     },
     constraint: {
@@ -800,22 +975,52 @@ function v2ArrayToConfig(arr: unknown[]): Record<string, unknown> {
   }
 }
 
-/** v3 位置数组 → 配置对象（在 v2 基础上尾部追加渠道节） */
-function v3ArrayToConfig(arr: unknown[]): Record<string, unknown> {
-  const base = v2ArrayToConfig(arr)
+/** 渠道节解码（v3 起追加在尾部，v3/v4 共用） */
+function decodeChannel(arr: unknown[]): Record<string, unknown> {
   const rawSizes = Array.isArray(arr[38]) ? (arr[38] as unknown[]) : []
-
   return {
-    ...base,
-    channel: {
-      name: arr[36],
-      subfolderPattern: arr[37],
-      sizes: rawSizes.map((s) => {
-        const e = Array.isArray(s) ? (s as unknown[]) : []
-        return { id: e[0], label: e[1], width: e[2], height: e[3] }
-      }),
-    },
+    name: arr[36],
+    subfolderPattern: arr[37],
+    sizes: rawSizes.map((s) => {
+      const e = Array.isArray(s) ? (s as unknown[]) : []
+      return { id: e[0], label: e[1], width: e[2], height: e[3] }
+    }),
+  }
+}
+
+/** v3 位置数组 → 配置对象（v2 布局 + 渠道节，封面仍为旧结构） */
+function v3ArrayToConfig(arr: unknown[]): Record<string, unknown> {
+  return {
+    ...v2ArrayToConfig(arr, true),
+    channel: decodeChannel(arr),
     // overlay 含本机路径，不进分享码；缺失时 sanitizeConfig 补默认空列表
+  }
+}
+
+/** v4 位置数组 → 配置对象（封面文本元素化；无封面画布节，走默认跟随正文） */
+function v4ArrayToConfig(arr: unknown[]): Record<string, unknown> {
+  return {
+    ...v2ArrayToConfig(arr, false),
+    channel: decodeChannel(arr),
+  }
+}
+
+/** 封面画布解码（v5 追加在 39~43） */
+function decodeCoverCanvas(arr: unknown[]): Record<string, unknown> {
+  return {
+    width: arr[39],
+    height: arr[40],
+    unit: dec(SIZE_UNIT, arr[41], 'px'),
+    orientation: dec(ORIENTATION, arr[42], 'portrait'),
+    followBody: arr[43] === 1,
+  }
+}
+
+/** v5 位置数组 → 配置对象（v4 + 封面画布） */
+function v5ArrayToConfig(arr: unknown[]): Record<string, unknown> {
+  return {
+    ...v4ArrayToConfig(arr),
+    coverCanvas: decodeCoverCanvas(arr),
   }
 }
 
@@ -892,6 +1097,8 @@ function legacyV1ArrayToConfig(arr: unknown[]): Record<string, unknown> {
 const ARRAY_MIN_LENGTH_V1 = 43
 const ARRAY_MIN_LENGTH_V2 = 36
 const ARRAY_MIN_LENGTH_V3 = 39
+const ARRAY_MIN_LENGTH_V4 = 39
+const ARRAY_MIN_LENGTH_V5 = 44
 
 // ---------------------------------------------------------------- Base64URL
 
@@ -990,9 +1197,18 @@ function decodeShareCode(code: string): DecodedTemplate {
     )
   }
 
-  // 按版本选择长度下限与解码分支：v1 / v2 / v3 的字段索引不同（v3 是 v2 的尾部追加）
+  // 按版本选择长度下限与解码分支：v1 / v2 / v3 / v4 的封面布局不同
+  // （v3/v4 在 v2 基础上尾部追加渠道节，v4 起封面为文本元素数组）
   const minLength =
-    version >= 3 ? ARRAY_MIN_LENGTH_V3 : version >= 2 ? ARRAY_MIN_LENGTH_V2 : ARRAY_MIN_LENGTH_V1
+    version >= 5
+      ? ARRAY_MIN_LENGTH_V5
+      : version >= 4
+        ? ARRAY_MIN_LENGTH_V4
+      : version >= 3
+        ? ARRAY_MIN_LENGTH_V3
+        : version >= 2
+          ? ARRAY_MIN_LENGTH_V2
+          : ARRAY_MIN_LENGTH_V1
   if (arr.length < minLength) {
     throw new Error(
       `分享码字段数量不足（${arr.length} < ${minLength}），可能来自不兼容的版本`,
@@ -1000,7 +1216,15 @@ function decodeShareCode(code: string): DecodedTemplate {
   }
 
   const raw =
-    version >= 3 ? v3ArrayToConfig(arr) : version >= 2 ? v2ArrayToConfig(arr) : legacyV1ArrayToConfig(arr)
+    version >= 5
+      ? v5ArrayToConfig(arr)
+      : version >= 4
+        ? v4ArrayToConfig(arr)
+      : version >= 3
+        ? v3ArrayToConfig(arr)
+        : version >= 2
+          ? v2ArrayToConfig(arr, true)
+          : legacyV1ArrayToConfig(arr)
 
   return {
     name: str(name, '未命名模板', 60) || '未命名模板',

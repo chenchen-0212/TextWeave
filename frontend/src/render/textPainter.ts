@@ -1,7 +1,8 @@
-import type { CoverItem, Geometry, Line, MaskConfig, Page, StyleConfig } from '../types'
+import type { CoverItem, CoverTextBox, Geometry, Line, MaskConfig, Page, StyleConfig } from '../types'
 import { setLetterSpacing } from '../core/FontMetrics'
 import { toGraphemes } from '../core/graphemes'
 import { getTextOrigin } from './masks'
+import { withAlpha } from '../utils/color'
 
 /**
  * 文字绘制。
@@ -119,68 +120,99 @@ export function drawContentText(
   return y
 }
 
-/** 绘制封面页。样式全部来自该封面自身的配置。 */
+/**
+ * 绘制封面页。
+ *
+ * 每个文本自带蒙版（`box.mask` + `box.maskEnabled`），蒙版面板挂在**该文本图层**上
+ * （`box.panel`，由 core 按文字块外扩得到），而不是整页共用封面蒙版。
+ * 多个文本按 `z` 升序绘制：靠后（z 大）的文本及其蒙版盖在前面之上。
+ * 坐标与换行全部来自 core 的 `coverTextBoxes`，这里只负责按盒绘制。
+ */
 export function drawCoverText(
   ctx: CanvasRenderingContext2D,
   page: Page,
   cfg: StyleConfig,
   item: CoverItem,
 ): void {
+  const boxes = page.coverTextBoxes ?? []
+  if (boxes.length === 0) return
+
   const t = cfg.text
-
-  const mask: MaskConfig = item.useOwnMask ? item.mask : cfg.mask
-  const maskPad = mask.type === 'card' ? mask.pad : 0
-  const pad = t.padding + maskPad
-
-  const boxX = pad
-  const boxW = Math.max(1, cfg.canvas.width - pad * 2)
-
-  const titleLines = page.titleLines ?? []
-  const subtitleLines = page.subtitleLines ?? []
-
   // 空串表示沿用正文颜色，便于只改一处就统一整体系列
-  const textColor = item.color || t.color
-  const titleSize = item.titleFontSize
-  const titleLineHeight = titleSize * 1.25
-  const subSize = Math.max(16, Math.round(titleSize * 0.42))
-  const subWeight = item.titleWeight >= 700 ? 400 : 300
-  const subLineHeight = subSize * 1.6
-  const gap = titleLines.length > 0 && subtitleLines.length > 0 ? titleSize * 0.5 : 0
+  const fallbackColor = t.color
 
-  const blockHeight =
-    titleLines.length * titleLineHeight + gap + subtitleLines.length * subLineHeight
+  for (const box of boxes) {
+    // 该文本自己的蒙版（局部面板，挂在文本图层上）
+    if (box.maskEnabled) {
+      drawTextLayerMask(ctx, box, cfg)
+    }
 
-  // 整体块的纵向位置
-  let startY = (cfg.canvas.height - blockHeight) / 2
-  if (item.layout === 'top') {
-    startY = pad
-  } else if (item.layout === 'bottom') {
-    startY = cfg.canvas.height - pad - blockHeight
-  }
+    const lineHeight = box.fontSize * 1.25
+    applyFont(ctx, t.fontFamily, box.fontSize, box.fontWeight, box.color || fallbackColor, t.letterSpacing)
 
-  let y = startY
+    // 盒内水平对齐：left/right 用实际行宽，center 用盒宽中线
+    ctx.textAlign = box.align === 'left' ? 'left' : box.align === 'right' ? 'right' : 'center'
+    const anchorX =
+      box.align === 'left' ? box.x : box.align === 'right' ? box.x + box.w : box.x + box.w / 2
 
-  if (titleLines.length > 0) {
-    applyFont(ctx, t.fontFamily, titleSize, item.titleWeight, textColor, t.letterSpacing)
-    for (const line of titleLines) {
-      const lineY = y + (titleLineHeight - titleSize) / 2
-      ctx.textAlign = 'center'
-      ctx.fillText(line.text, boxX + boxW / 2, lineY)
-      y += titleLineHeight
+    let y = box.y
+    for (const line of box.lines) {
+      // 基线对齐：让视觉中心落在行盒中心
+      const lineY = y + (lineHeight - box.fontSize) / 2
+      ctx.fillText(line.text, anchorX, lineY)
+      y += lineHeight
     }
   }
+}
 
-  if (subtitleLines.length > 0) {
-    y += gap
-    applyFont(ctx, t.fontFamily, subSize, subWeight, textColor, t.letterSpacing)
-    // 副标题略透明，形成层次
-    ctx.globalAlpha = 0.82
-    for (const line of subtitleLines) {
-      const lineY = y + (subLineHeight - subSize) / 2
-      ctx.textAlign = 'center'
-      ctx.fillText(line.text, boxX + boxW / 2, lineY)
-      y += subLineHeight
+/**
+ * 绘制单个文本的局部蒙版面板。
+ * 面板区域已由 core 计算好（文字块 + mask.pad 外扩），这里只按形态填充。
+ */
+function drawTextLayerMask(ctx: CanvasRenderingContext2D, box: CoverTextBox, cfg: StyleConfig): void {
+  const m = box.mask
+  const p = box.panel
+  ctx.save()
+  switch (m.type) {
+    case 'card': {
+      const radius = Math.max(0, Math.min(m.radius, Math.min(p.w, p.h) / 2))
+      ctx.beginPath()
+      ctx.roundRect(p.x, p.y, p.w, p.h, radius)
+      ctx.fillStyle = withAlpha(m.color, m.alpha)
+      ctx.fill()
+      break
     }
-    ctx.globalAlpha = 1
+    case 'veil': {
+      ctx.fillStyle = withAlpha(m.color, m.alpha)
+      ctx.fillRect(p.x, p.y, p.w, p.h)
+      break
+    }
+    case 'gradient': {
+      // 在面板内做垂直渐变
+      const dir = m.direction
+      const solid = Math.max(0, Math.min(0.95, m.solidRatio))
+      const transparent = Math.max(solid + 0.01, Math.min(0.99, m.transparentRatio))
+      if (dir === 'bottom' || dir === 'both') {
+        const ySolid = p.y + p.h - p.h * solid
+        const yZero = p.y + p.h - p.h * transparent
+        const g = ctx.createLinearGradient(0, yZero, 0, ySolid)
+        g.addColorStop(0, withAlpha(m.color, 0))
+        g.addColorStop(1, withAlpha(m.color, m.maxAlpha))
+        ctx.fillStyle = g
+        ctx.fillRect(p.x, yZero, p.w, p.y + p.h - yZero)
+      }
+      if (dir === 'top' || dir === 'both') {
+        const ySolid = p.y + p.h * solid
+        const yZero = p.y + p.h * transparent
+        const g = ctx.createLinearGradient(0, yZero, 0, ySolid)
+        g.addColorStop(0, withAlpha(m.color, 0))
+        g.addColorStop(1, withAlpha(m.color, m.maxAlpha))
+        ctx.fillStyle = g
+        ctx.fillRect(p.x, p.y, p.w, yZero - p.y)
+      }
+      break
+    }
   }
+  ctx.restore()
+  void cfg
 }

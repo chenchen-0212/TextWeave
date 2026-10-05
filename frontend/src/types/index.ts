@@ -18,6 +18,57 @@ export type FontSource = 'system' | 'user'
 
 // ------------------------------------------------------------------ 画布
 
+/** 尺寸单位。内部一律换算为像素（px）参与渲染。 */
+export type SizeUnit = 'px' | 'mm' | 'cm' | 'in'
+
+/** 朝向约束：auto 不约束；其余会把宽高归一到对应关系 */
+export type Orientation = 'auto' | 'portrait' | 'landscape' | 'square'
+
+/** 可选单位（供界面下拉使用） */
+export const SIZE_UNITS: ReadonlyArray<{ value: SizeUnit; label: string }> = [
+  { value: 'px', label: 'px 像素' },
+  { value: 'mm', label: 'mm 毫米' },
+  { value: 'cm', label: 'cm 厘米' },
+  { value: 'in', label: 'in 英寸' },
+]
+
+export const ORIENTATIONS: ReadonlyArray<{ value: Orientation; label: string }> = [
+  { value: 'auto', label: '不约束' },
+  { value: 'portrait', label: '纵向' },
+  { value: 'landscape', label: '横向' },
+  { value: 'square', label: '方形' },
+]
+
+/** 封面画布尺寸（与正文画布完全独立） */
+export interface CoverCanvasConfig {
+  /** 宽，数值含义由 unit 决定 */
+  width: number
+  /** 高，数值含义由 unit 决定 */
+  height: number
+  unit: SizeUnit
+  orientation: Orientation
+  /**
+   * 是否跟随正文尺寸。
+   * true（默认）时忽略 width/height，封面与正文同尺寸 —— 这是旧数据的行为；
+   * false 时封面使用自己的 width/height，且**不影响正文排版**。
+   */
+  followBody: boolean
+}
+
+/** 画布尺寸的像素边界（换算成 px 后夹取），避免负值/缺省值导致渲染异常 */
+export const CANVAS_MIN_PX = 64
+export const CANVAS_MAX_PX = 8000
+
+export function defaultCoverCanvas(): CoverCanvasConfig {
+  return {
+    width: 1080,
+    height: 1920,
+    unit: 'px',
+    orientation: 'portrait',
+    followBody: true,
+  }
+}
+
 export interface CanvasConfig {
   /** 手机尺寸预设 id，手改宽高后变为 custom */
   preset: string
@@ -159,18 +210,55 @@ export interface CoverBackground {
   vignette: number
 }
 
+/** 封面文本的水平对齐方式，同时决定锚点语义 */
+export type CoverTextAlign = 'left' | 'center' | 'right'
+
+/**
+ * 封面文本元素（统一文本蒙版模块）。
+ *
+ * 坐标一律用**归一化值**（0~1，相对画布宽高），与画布尺寸解耦：
+ *  - 换画布尺寸、1080×1920 → 1080×1440、多尺寸导出时位置按比例自动跟随；
+ *  - `placed=false` 表示用户没拖过，由 `cover.layout` 自动排布。
+ *
+ * 每个文本**自带一块蒙版**（`mask`），挂载在文本图层上而非封面公共蒙版：
+ * 蒙版面板由该文本的排版盒外扩 `mask.pad` 得到，因此「显示范围由自身蒙版决定」；
+ * `z` 决定多个文本蒙版之间的叠放次序（数值大的盖在上面）；`maskEnabled` 是该
+ * 文本蒙版的独立开关。封面级 `CoverItem.mask` 仍作为整页底衬保留，两者互不干扰。
+ */
+export interface CoverTextElement {
+  id: string
+  enabled: boolean
+  text: string
+  fontSize: number
+  fontWeight: 300 | 400 | 500 | 700
+  /** 空串表示沿用正文文字颜色 */
+  color: string
+  align: CoverTextAlign
+  /** 归一化锚点横坐标：left=左缘 / center=中线 / right=右缘 */
+  x: number
+  /** 归一化锚点纵坐标，语义为「文本块垂直中心」 */
+  y: number
+  /** 自动换行的最大宽度占画布宽的比例 */
+  widthRatio: number
+  /** 是否已被用户拖拽定位 */
+  placed: boolean
+  /** 该文本自己的蒙版（文本图层上，不使用封面公共蒙版） */
+  mask: MaskConfig
+  /** 该文本蒙版的独立开关 */
+  maskEnabled: boolean
+  /** 叠放次序，数值大的后绘制（盖在上面）；默认按数组顺序 */
+  z: number
+}
+
 /** 一张封面 */
 export interface CoverItem {
   id: string
   /** 是否参与输出 */
   enabled: boolean
-  title: string
-  subtitle: string
-  titleFontSize: number
-  titleWeight: number
+  /** 文本元素（副标题能力已于 v0.4.0 下线） */
+  texts: CoverTextElement[]
+  /** 未拖拽元素（placed=false）的自动版式 */
   layout: CoverLayout
-  /** 主标题颜色覆盖；空串表示沿用正文文字颜色 */
-  color: string
   /** 是否使用独立蒙版；false 时沿用正文蒙版 */
   useOwnMask: boolean
   mask: MaskConfig
@@ -351,6 +439,8 @@ export const MAX_EXPORT_SIZES = 8
 
 export interface StyleConfig {
   canvas: CanvasConfig
+  /** 封面画布（v0.4.0 起与正文解耦；缺省时跟随正文） */
+  coverCanvas: CoverCanvasConfig
   background: BackgroundConfig
   mask: MaskConfig
   text: TextConfig
@@ -388,11 +478,41 @@ export interface Page {
   blocks: Block[]
   /** 仅封面页：对应的封面 id，用于渲染时取该封面的背景与样式 */
   coverId?: string
-  /** 仅封面页 */
-  titleLines?: Line[]
-  subtitleLines?: Line[]
+  /**
+   * 仅封面页：文本元素的实测包围盒（逻辑坐标，已越界钳制）。
+   * 渲染、拖拽命中框、吸附参考线三处共用这一份数据 —— 绝不在 UI 侧另算一套。
+   */
+  coverTextBoxes?: CoverTextBox[]
   /** 内容高度（不含末尾段间距） */
   usedHeight: number
+}
+
+/** 封面文本元素的排版结果（core 产出，render 与交互共用） */
+export interface CoverTextBox {
+  elementId: string
+  lines: Line[]
+  /** 文字块左上角（逻辑坐标，已钳制到画布内） */
+  x: number
+  y: number
+  w: number
+  h: number
+  fontSize: number
+  fontWeight: number
+  color: string
+  align: CoverTextAlign
+  /** 该文本自己的蒙版（用于渲染局部面板） */
+  mask: MaskConfig
+  /** 该文本蒙版是否启用 */
+  maskEnabled: boolean
+  /** 叠放次序（render 用） */
+  z: number
+  /**
+   * 蒙版面板区域（逻辑坐标）：文字块按 mask.pad 外扩得到。
+   * maskEnabled=false 或非 card 形态时退化为文字块本身（veil/gradient 覆盖整块）。
+   */
+  panel: { x: number; y: number; w: number; h: number }
+  /** 是否与其他文本元素重叠（诊断提示用，不阻断渲染） */
+  overlapped: boolean
 }
 
 // ------------------------------------------------------------------ 诊断
@@ -588,16 +708,50 @@ export function defaultCoverBackground(): CoverBackground {
   }
 }
 
+/** 封面文本数量上限（单张封面） */
+export const MAX_COVER_TEXTS = 6
+
+export function defaultCoverText(overrides: Partial<CoverTextElement> = {}): CoverTextElement {
+  return {
+    id: `ctext-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    enabled: true,
+    text: '',
+    fontSize: 96,
+    fontWeight: 700,
+    color: '',
+    align: 'center',
+    x: 0.5,
+    y: 0.5,
+    widthRatio: 0.86,
+    placed: false,
+    // 文本自带蒙版：默认关闭 + 独立卡片参数，开关打开即生效
+    mask: defaultCoverTextMask(),
+    maskEnabled: false,
+    z: 0,
+    ...overrides,
+  }
+}
+
+/** 文本级蒙版默认值（比封面底蒙版更收敛：pad 小、无毛玻璃） */
+export function defaultCoverTextMask(): MaskConfig {
+  return {
+    type: 'card',
+    color: '#000000',
+    alpha: 0.45,
+    radius: 18,
+    pad: 28,
+    blur: 0,
+    position: 'center',
+  }
+}
+
 export function defaultCoverItem(index = 1): CoverItem {
+  const first = defaultCoverText({ text: index === 1 ? '' : `封面 ${index}` })
   return {
     id: `cover-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     enabled: true,
-    title: index === 1 ? '' : `封面 ${index}`,
-    subtitle: '',
-    titleFontSize: 96,
-    titleWeight: 700,
+    texts: [first],
     layout: 'center',
-    color: '',
     useOwnMask: false,
     mask: defaultCoverMask(),
     background: defaultCoverBackground(),
@@ -630,6 +784,7 @@ export function defaultConfig(): StyleConfig {
       format: 'png',
       quality: 0.92,
     },
+    coverCanvas: defaultCoverCanvas(),
     background: {
       fillMode: 'cover',
       brightness: 1,
@@ -721,16 +876,18 @@ export const SHARE_CODE_PREFIX = 'TW1-'
  *  v1 —— 单封面结构（cover.enable / title / ...）
  *  v2 —— 封面集合结构（cover.items[]，每张封面带独立背景）
  *  v3 —— 新增渠道节（channel.name / subfolderPattern / sizes，O-03 渠道模板包）。
+ *  v4 —— 封面文本元素化（cover.items[].texts[]，可拖拽定位），副标题下线。
+ *  v5 —— 封面画布独立（coverCanvas：宽/高/单位/朝向/是否跟随正文），与正文尺寸解耦。
  *        引导元素（overlay）含本机图片路径，**不进分享码**，与输出目录同策略。
  * 解码端必须保留旧版分支，否则老分享码会解出一堆错位的值。
  */
-export const SHARE_PAYLOAD_VERSION = 3
+export const SHARE_PAYLOAD_VERSION = 5
 
 /** 封面数量上限 */
 export const MAX_COVERS = 20
 
 /** 模板存储的 schema 版本，用于本地数据迁移 */
-export const TEMPLATE_STORE_VERSION = 1
+export const TEMPLATE_STORE_VERSION = 2
 
 /** 本地模板数量上限，防止 localStorage 被写满 */
 export const MAX_TEMPLATES = 60

@@ -91,15 +91,15 @@ bash scripts/build-macos.sh
 ```bash
 export CGO_ENABLED=1
 wails build -clean -platform darwin/universal
-bash scripts/package-macos.sh 0.3.0
+bash scripts/package-macos.sh 0.4.0
 ```
 
 产物：
 
 ```
 build/bin/TextWeave.app                              # 应用本体
-dist/TextWeave-0.3.0-macos-universal.dmg             # 磁盘映像（拖拽安装）
-dist/TextWeave-0.3.0-macos-universal.zip             # 备用分发格式
+dist/TextWeave-0.4.0-macos-universal.dmg             # 磁盘映像（拖拽安装）
+dist/TextWeave-0.4.0-macos-universal.zip             # 备用分发格式
 ```
 
 `darwin/universal` 会分别编译 `arm64` 与 `amd64` 再合并，因此首次构建较慢，

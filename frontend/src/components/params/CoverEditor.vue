@@ -9,7 +9,7 @@
 
 import { computed, ref, watch } from 'vue'
 import type { CoverItem, MaskType } from '../../types'
-import { BLEND_MODES } from '../../types'
+import { BLEND_MODES, defaultCoverTextMask, defaultMaskOfType } from '../../types'
 import { useAppStore } from '../../stores/config'
 import MaskControls from './MaskControls.vue'
 import ParamField from '../ui/ParamField.vue'
@@ -19,10 +19,22 @@ const props = defineProps<{ cover: CoverItem }>()
 const store = useAppStore()
 const cfg = store.cfg
 
+/** 文本级蒙版切换形态：基于文本默认参数重建，避免残留上一个形态的字段 */
+function defaultCoverTextMaskOf(type: MaskType) {
+  const base = defaultCoverTextMask()
+  return type === 'card' ? base : defaultMaskOfType(type)
+}
+
 const WEIGHTS = [
   { value: 400, label: '常规 400' },
   { value: 500, label: '中等 500' },
   { value: 700, label: '加粗 700' },
+]
+
+const ALIGNS = [
+  { value: 'left', label: '左对齐' },
+  { value: 'center', label: '居中' },
+  { value: 'right', label: '右对齐' },
 ]
 
 const LAYOUTS = [
@@ -137,65 +149,180 @@ const hasImage = computed(() => {
 
 <template>
   <div class="cover-editor">
-    <!-- 文字内容 -->
-    <div class="cover-group-title">文字内容</div>
-    <input
-      :value="cover.title"
-      type="text"
-      placeholder="主标题（留空则不显示）"
-      class="mb8"
-      @input="setCover('title', ($event.target as HTMLInputElement).value)"
-    />
-    <input
-      :value="cover.subtitle"
-      type="text"
-      placeholder="副标题（可留空）"
-      class="mb8"
-      @input="setCover('subtitle', ($event.target as HTMLInputElement).value)"
-    />
+    <!-- 文本元素（副标题能力已下线；位置可直接在预览画布上拖拽） -->
+    <div class="cover-group-title">文本元素</div>
+    <div class="field-hint" style="margin-left: 0; margin-top: 0">
+      在中间预览的封面页上可直接拖动文本定位；拖动时会吸附到中线、三分线与安全边距。
+    </div>
+
+    <div
+      v-for="(el, i) in cover.texts"
+      :key="el.id"
+      class="ctext-item"
+      :class="{ sel: store.selectedCoverTextId === el.id, off: !el.enabled }"
+      @click="store.selectedCoverTextId = el.id"
+    >
+      <div class="row between">
+        <label class="check-row" style="flex: 1">
+          <input v-model="el.enabled" type="checkbox" @click.stop />
+          <span style="font-size: 11.5px">文本 {{ i + 1 }}</span>
+        </label>
+        <span class="ctext-pos mono">{{
+          el.placed ? `已定位 ${Math.round(el.x * 100)}% / ${Math.round(el.y * 100)}%` : '自动版式'
+        }}</span>
+        <button
+          class="btn sm ghost"
+          type="button"
+          :disabled="cover.texts.length <= 1"
+          title="删除该文本元素"
+          @click.stop="store.removeCoverText(cover.id, el.id)"
+        >
+          删
+        </button>
+      </div>
+
+      <input
+        v-model="el.text"
+        type="text"
+        placeholder="文本内容（留空则不输出）"
+        class="mb8"
+      />
+      <div v-if="!el.text.trim()" class="field-hint" style="margin-left: 0">
+        空文本不会输出，但仍可保留位置。
+      </div>
+
+      <ParamField
+        label="字号"
+        :modelValue="el.fontSize"
+        :min="16"
+        :max="300"
+        unit="px"
+        @update:modelValue="(v) => (el.fontSize = Number(v))"
+      />
+      <ParamField
+        label="字重"
+        type="select"
+        :modelValue="el.fontWeight"
+        :options="WEIGHTS"
+        @update:modelValue="(v) => (el.fontWeight = Number(v) as 300 | 400 | 500 | 700)"
+      />
+      <ParamField
+        label="对齐"
+        type="select"
+        :modelValue="el.align"
+        :options="ALIGNS"
+        @update:modelValue="(v) => (el.align = String(v) as 'left' | 'center' | 'right')"
+      />
+      <ParamField
+        label="颜色"
+        type="color"
+        :modelValue="el.color || cfg.text.color"
+        @update:modelValue="(v) => (el.color = String(v))"
+      />
+      <div class="field-hint">
+        留空跟随正文颜色。
+        <button v-if="el.color" class="btn sm ghost" type="button" @click="el.color = ''">
+          恢复跟随
+        </button>
+      </div>
+      <ParamField
+        label="换行宽度"
+        :modelValue="el.widthRatio"
+        :min="0.2"
+        :max="1"
+        :step="0.02"
+        :decimals="2"
+        @update:modelValue="(v) => (el.widthRatio = Number(v))"
+      />
+
+      <!-- 文本级蒙版：挂载在该文本图层上，与封面底蒙版互不干扰 -->
+      <div class="cover-group-sub">该文本的蒙版</div>
+      <ParamField
+        label="启用蒙版"
+        type="check"
+        :modelValue="el.maskEnabled"
+        @update:modelValue="(v) => store.toggleCoverTextMask(cover.id, el.id)"
+      />
+      <template v-if="el.maskEnabled">
+        <MaskControls
+          :mask="el.mask"
+          :show-type-switch="true"
+          @type-change="(t) => (el.mask = defaultCoverTextMaskOf(t))"
+        />
+        <div class="field-hint">
+          蒙版面板贴合这块文字（外扩 {{ el.mask.type === 'card' ? el.mask.pad : 0 }}px），
+          显示范围由它自己决定，与封面底蒙版无关。
+        </div>
+      </template>
+
+      <div class="row" style="margin-top: 6px">
+        <span class="ctext-pos" style="margin: 0">层级</span>
+        <button
+          class="btn sm ghost"
+          type="button"
+          :disabled="i === cover.texts.length - 1"
+          title="上移一层（盖在上面）"
+          @click="store.moveCoverTextLayer(cover.id, el.id, 1)"
+        >
+          上移
+        </button>
+        <button
+          class="btn sm ghost"
+          type="button"
+          :disabled="i === 0"
+          title="下移一层"
+          @click="store.moveCoverTextLayer(cover.id, el.id, -1)"
+        >
+          下移
+        </button>
+        <span class="ctext-pos">z={{ el.z }}</span>
+      </div>
+
+      <div class="row" style="margin-top: 4px">
+        <button
+          class="btn sm ghost"
+          type="button"
+          :disabled="!el.placed"
+          title="交还给自动版式（居中/靠上/靠下）"
+          @click="store.resetCoverTextAuto(cover.id, el.id)"
+        >
+          恢复自动版式
+        </button>
+        <button
+          class="btn sm ghost"
+          type="button"
+          :disabled="!store.coverTextUndo"
+          title="撤销最近一次拖拽"
+          @click="store.undoCoverTextMove()"
+        >
+          撤销移动
+        </button>
+      </div>
+    </div>
+
+    <div class="row mt8">
+      <button class="btn sm" type="button" @click="store.addCoverText(cover.id)">＋ 添加文本</button>
+      <button
+        class="btn sm ghost"
+        type="button"
+        :disabled="cover.texts.length < 2"
+        title="把全部文本按顺序均分到纵向区间"
+        @click="store.distributeCoverTexts(cover.id)"
+      >
+        垂直均分
+      </button>
+    </div>
 
     <!-- 版式 -->
     <div class="cover-group-title">版式</div>
     <ParamField
-      label="标题字号"
-      :modelValue="cover.titleFontSize"
-      :min="24"
-      :max="300"
-      unit="px"
-      @update:modelValue="(v) => setCover('titleFontSize', Number(v))"
-    />
-    <ParamField
-      label="标题字重"
-      type="select"
-      :modelValue="cover.titleWeight"
-      :options="WEIGHTS"
-      @update:modelValue="(v) => setCover('titleWeight', Number(v))"
-    />
-    <ParamField
-      label="版面位置"
+      label="自动版式"
       type="select"
       :modelValue="cover.layout"
       :options="LAYOUTS"
       @update:modelValue="(v) => setCover('layout', v)"
     />
-    <ParamField
-      label="标题颜色"
-      type="color"
-      :modelValue="cover.color || cfg.text.color"
-      @update:modelValue="(v) => setCover('color', String(v))"
-    />
-    <div class="field-hint">
-      标题颜色支持独立设置；与正文一致时无需改动（此时会跟随正文文字颜色）。
-      <button
-        v-if="cover.color"
-        class="btn sm ghost"
-        type="button"
-        style="margin-left: 4px"
-        @click="setCover('color', '')"
-      >
-        恢复跟随正文
-      </button>
-    </div>
+    <div class="field-hint">仅对未拖拽定位（自动版式）的文本生效。</div>
 
     <!-- 背景图 -->
     <div class="cover-group-title">背景图</div>
@@ -378,10 +505,10 @@ const hasImage = computed(() => {
       当前封面与正文共用同一张背景图。选「专属背景」可为本张封面单独指定底图并调整取景。
     </div>
 
-    <!-- 蒙版 -->
-    <div class="cover-group-title">蒙版</div>
+    <!-- 封面底蒙版：整页背景层，与每个文本自己的蒙版互不干扰 -->
+    <div class="cover-group-title">封面底蒙版（整页）</div>
     <ParamField
-      label="独立蒙版"
+      label="独立底蒙版"
       type="check"
       :modelValue="cover.useOwnMask"
       @update:modelValue="(v) => setCover('useOwnMask', Boolean(v))"
@@ -393,7 +520,7 @@ const hasImage = computed(() => {
       @type-change="onMaskTypeChange"
     />
     <div v-else class="field-hint">
-      当前沿用正文蒙版。封面上有更大的标题，通常需要更浓的遮罩，可打开「独立蒙版」单独调。
+      当前沿用正文蒙版作为整页底衬。封面上每块文字还可以各自挂载蒙版（见上方「该文本的蒙版」）。
     </div>
   </div>
 </template>
@@ -421,6 +548,28 @@ const hasImage = computed(() => {
   margin: 12px 0 7px;
   font-size: 10.5px;
   color: var(--text-3);
+}
+
+.ctext-item {
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+}
+
+.ctext-item.sel {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ctext-item.off {
+  opacity: 0.55;
+}
+
+.ctext-pos {
+  font-size: 10px;
+  color: var(--text-3);
+  margin-right: 4px;
 }
 
 .cover-bg-drop {

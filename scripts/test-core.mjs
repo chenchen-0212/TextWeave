@@ -32,6 +32,7 @@ function compile() {
 
   const args = [
     'src/core/layout.ts',
+    'src/core/pageCanvas.ts',
     'src/core/lineBreaker.ts',
     'src/core/prohibition.ts',
     'src/types/index.ts',
@@ -55,7 +56,17 @@ function compile() {
   }
 
   try {
-    execFileSync(process.execPath, [tscEntry, ...args], { cwd: FRONTEND, stdio: 'pipe' })
+    try {
+      execFileSync(process.execPath, [tscEntry, ...args], { cwd: FRONTEND, stdio: 'pipe' })
+    } catch (e) {
+      // 某些运行环境下 pipe 模式的子进程会被无信号终止（无退出码、无输出），
+      // 这类情况改用继承模式重试一次，真实编译错误仍会照常抛出。
+      if (e && (e.status === null || e.status === undefined)) {
+        execFileSync(process.execPath, [tscEntry, ...args], { cwd: FRONTEND, stdio: 'inherit' })
+      } else {
+        throw e
+      }
+    }
   } catch (e) {
     const out = String(e.stdout || '') + String(e.stderr || '')
     console.error('核心模块编译失败：\n' + out)
@@ -81,6 +92,7 @@ function load() {
     lineBreaker: requireFromOut('./core/lineBreaker.js'),
     prohibition: requireFromOut('./core/prohibition.js'),
     types: requireFromOut('./types/index.js'),
+    pageCanvas: requireFromOut('./core/pageCanvas.js'),
   }
 }
 
@@ -168,9 +180,10 @@ function check(name, condition, detail) {
   }
 }
 
-const { layout, lineBreaker, prohibition, types } = (compile(), load())
-const { buildLayout, computeGeometry, MIN_FONT_SIZE } = layout
-const { defaultConfig } = types
+const { layout, lineBreaker, prohibition, types, pageCanvas } = (compile(), load())
+const { buildLayout, computeGeometry, layoutCoverTextBoxes, MIN_FONT_SIZE } = layout
+const { defaultConfig, defaultCoverText, CANVAS_MIN_PX, CANVAS_MAX_PX } = types
+const { pageCanvasSize, resolveCoverCanvas, unitFactor, DPI } = pageCanvas
 
 function pagesAt(text, fontSize) {
   const cfg = defaultConfig()
@@ -331,6 +344,204 @@ function testOrphans() {
   check(`被切分的块行数均不小于 ${cfg.text.minOrphanLines} 行`, violations === 0, violations ? `${violations} 个违规块` : '')
 }
 
+// ---------------------------------------------------------------- F 封面文本元素
+
+function testCoverTexts() {
+  console.log('\nF. 封面文本元素（拖拽定位的排版基础）')
+
+  const cfg = defaultConfig()
+  const cover = cfg.cover.items[0]
+  const W = cfg.canvas.width
+  const H = cfg.canvas.height
+
+  // 默认封面文本为空 → 不产出任何包围盒
+  const empty = layoutCoverTextBoxes(cfg, cover, makeMetrics())
+  check('空文本不产出包围盒', empty.length === 0, String(empty.length))
+
+  // 自动版式：居中 / 靠上 / 靠下
+  cover.texts[0].text = '这是一段封面文字'
+  cover.texts[0].placed = false
+
+  const centerBox = layoutCoverTextBoxes(cfg, cover, makeMetrics())[0]
+  const centerMidY = centerBox.y + centerBox.h / 2
+  check('居中版式：块中心在画布中线附近', Math.abs(centerMidY - H / 2) <= 2, centerMidY.toFixed(1))
+
+  cover.layout = 'top'
+  const topBox = layoutCoverTextBoxes(cfg, cover, makeMetrics())[0]
+  check('靠上版式：块顶边不高于安全区', topBox.y >= 0 && topBox.y < H * 0.3, topBox.y.toFixed(1))
+
+  cover.layout = 'bottom'
+  const bottomBox = layoutCoverTextBoxes(cfg, cover, makeMetrics())[0]
+  check('靠下版式：块底边不小于安全区', bottomBox.y + bottomBox.h > H * 0.6, bottomBox.y.toFixed(1))
+
+  // 手动定位 + 越界钳制
+  cover.layout = 'center'
+  cover.texts[0].placed = true
+  cover.texts[0].align = 'left'
+  cover.texts[0].x = -1
+  cover.texts[0].y = 2
+  const clamped = layoutCoverTextBoxes(cfg, cover, makeMetrics())[0]
+  check('越界锚点被钳制到画布内', clamped.x >= 0 && clamped.y >= 0, `${clamped.x.toFixed(1)},${clamped.y.toFixed(1)}`)
+  check('钳制后包围盒不超出画布', clamped.x + clamped.w <= W + 0.5 && clamped.y + clamped.h <= H + 0.5)
+
+  // 窄宽度触发换行，块高随之增加
+  cover.texts[0].text = '一二三四五六七八九十一二三四五六七八九十'
+  cover.texts[0].x = 0.5
+  cover.texts[0].y = 0.5
+  cover.texts[0].align = 'center'
+  cover.texts[0].widthRatio = 1
+  const wide = layoutCoverTextBoxes(cfg, cover, makeMetrics())[0]
+  cover.texts[0].widthRatio = 0.25
+  const narrow = layoutCoverTextBoxes(cfg, cover, makeMetrics())[0]
+  check('窄宽度导致更多行与更大块高', narrow.lines.length > wide.lines.length && narrow.h > wide.h,
+    `${wide.lines.length}行/${wide.h.toFixed(0)} vs ${narrow.lines.length}行/${narrow.h.toFixed(0)}`)
+
+  // 重叠检测
+  cover.texts[0].widthRatio = 0.86
+  cover.texts = [cover.texts[0], { ...cover.texts[0], id: 'second', y: 0.5, x: 0.5 }]
+  const overlapped = layoutCoverTextBoxes(cfg, cover, makeMetrics())
+  check('同位置双元素被标记为重叠', overlapped.length === 2 && overlapped.every((b) => b.overlapped), JSON.stringify(overlapped.map((b) => b.overlapped)))
+
+  cover.texts[1].y = 0.95
+  const separated = layoutCoverTextBoxes(cfg, cover, makeMetrics())
+  check('错开足够距离后不再重叠', separated.every((b) => !b.overlapped), JSON.stringify(separated.map((b) => b.overlapped)))
+
+  // 停用元素不参与排版
+  cover.texts[0].enabled = false
+  const disabled = layoutCoverTextBoxes(cfg, cover, makeMetrics())
+  check('停用元素被跳过', disabled.length === 1 && disabled[0].elementId === 'second', String(disabled.length))
+
+  // ---- 文本级蒙版：面板贴合文字块 ----
+  cover.texts = [
+    { ...defaultCoverText({ id: 'a', text: '甲', placed: true, x: 0.5, y: 0.3, widthRatio: 0.5 }) },
+    { ...defaultCoverText({ id: 'b', text: '乙', placed: true, x: 0.5, y: 0.7, widthRatio: 0.5 }) },
+  ]
+  cover.texts[0].maskEnabled = true
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, pad: 30, blur: 0, position: 'center' }
+  const withMask = layoutCoverTextBoxes(cfg, cover, makeMetrics())
+  const a = withMask.find((b) => b.elementId === 'a')
+  const pad = 30
+  check('面板按 mask.pad 外扩', Math.abs(a.panel.w - a.w - pad * 2) < 0.5 && Math.abs(a.panel.h - a.h - pad * 2) < 0.5,
+    `panel ${a.panel.w.toFixed(1)}x${a.panel.h.toFixed(1)} vs text ${a.w.toFixed(1)}x${a.h.toFixed(1)}`)
+  check('面板相对文字块居中', Math.abs((a.panel.x + a.panel.w / 2) - (a.x + a.w / 2)) < 0.5)
+  check('启用标记透传', a.maskEnabled === true)
+  check('未启用元素面板退化为文字块', withMask.find((b) => b.elementId === 'b').panel.w === withMask.find((b) => b.elementId === 'b').w)
+
+  // 面板越界也要被钳制
+  cover.texts[0].y = 0
+  const clampedPanel = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('面板被钳制在画布内', clampedPanel.panel.x >= 0 && clampedPanel.panel.y >= 0 &&
+    clampedPanel.panel.x + clampedPanel.panel.w <= cfg.canvas.width + 0.5 &&
+    clampedPanel.panel.y + clampedPanel.panel.h <= cfg.canvas.height + 0.5,
+    `${clampedPanel.panel.x.toFixed(1)},${clampedPanel.panel.y.toFixed(1)}`)
+
+  // veil/gradient 形态不做 pad 外扩
+  cover.texts[0].y = 0.3
+  cover.texts[0].mask = { type: 'veil', color: '#000000', alpha: 0.4, topBoost: 0, bottomBoost: 0 }
+  const veilBox = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('veil 形态面板等于文字块', veilBox.panel.w === veilBox.w && veilBox.panel.h === veilBox.h)
+
+  // ---- 层级：按 z 升序 ----
+  cover.texts[0].maskEnabled = false
+  cover.texts[0].z = 5
+  cover.texts[1].z = 1
+  const ordered = layoutCoverTextBoxes(cfg, cover, makeMetrics())
+  check('按 z 升序排列', ordered[0].elementId === 'b' && ordered[1].elementId === 'a',
+    ordered.map((b) => `${b.elementId}:${b.z}`).join(','))
+
+  cover.texts[0].z = 0
+  cover.texts[1].z = 0
+  const stable = layoutCoverTextBoxes(cfg, cover, makeMetrics())
+  check('同 z 保持数组顺序', stable[0].elementId === 'a' && stable[1].elementId === 'b',
+    stable.map((b) => b.elementId).join(','))
+}
+
+// ---------------------------------------------------------------- G 封面尺寸解耦
+
+function testCoverCanvas() {
+  console.log('\nG. 封面尺寸与正文解耦')
+
+  // 1) 默认跟随正文 → 与解耦前行为一致
+  const cfg = defaultConfig()
+  check('默认跟随正文', cfg.coverCanvas.followBody === true)
+  check('默认封面尺寸等于正文', pageCanvasSize(cfg, 'cover').width === cfg.canvas.width &&
+    pageCanvasSize(cfg, 'cover').height === cfg.canvas.height)
+  check('正文页始终取正文画布', pageCanvasSize(cfg, 'content').width === cfg.canvas.width)
+
+  // 2) 独立尺寸：只影响封面
+  cfg.coverCanvas.followBody = false
+  cfg.coverCanvas.width = 1200
+  cfg.coverCanvas.height = 630
+  cfg.coverCanvas.orientation = 'auto'
+  const coverSize = pageCanvasSize(cfg, 'cover')
+  const bodySize = pageCanvasSize(cfg, 'content')
+  check('封面取独立尺寸', coverSize.width === 1200 && coverSize.height === 630, `${coverSize.width}x${coverSize.height}`)
+  check('正文尺寸不受影响', bodySize.width === cfg.canvas.width && bodySize.height === cfg.canvas.height,
+    `${bodySize.width}x${bodySize.height}`)
+
+  // 3) 封面文本排版按封面尺寸，正文分页按正文尺寸
+  const cover = cfg.cover.items[0]
+  cover.texts[0].text = '封面文字'
+  cover.texts[0].placed = false
+  const wide = layoutCoverTextBoxes(cfg, cover, makeMetrics())[0]
+  check('封面文本盒不超过封面宽度', wide.x + wide.w <= coverSize.width + 0.5,
+    `${(wide.x + wide.w).toFixed(1)} vs ${coverSize.width}`)
+
+  const bodyText = '这是一段正文内容，用来验证封面尺寸变化不会影响正文排版。'.repeat(6)
+  cfg.constraint.enable = false
+  const layoutWide = buildLayout(bodyText, cfg, makeMetrics())
+  const beforePages = layoutWide.pages.filter((p) => p.kind === 'content').length
+
+  // 把封面改成极端尺寸，正文页数必须一模一样
+  cfg.coverCanvas.width = 400
+  cfg.coverCanvas.height = 400
+  const layoutNarrow = buildLayout(bodyText, cfg, makeMetrics())
+  const afterPages = layoutNarrow.pages.filter((p) => p.kind === 'content').length
+  check('封面尺寸变化后正文页数不变', beforePages === afterPages, `${beforePages} vs ${afterPages}`)
+
+  const boxA = layoutWide.pages.find((p) => p.kind === 'content')
+  const boxB = layoutNarrow.pages.find((p) => p.kind === 'content')
+  const sameLayout =
+    boxA.blocks.length === boxB.blocks.length &&
+    boxA.blocks.every((blk, i) => blk.lines.length === boxB.blocks[i].lines.length)
+  check('封面尺寸变化后正文逐块结构不变', sameLayout)
+
+  // 4) 单位换算（96 DPI）
+  check('px 系数为 1', unitFactor('px') === 1)
+  check('in 系数为 96', unitFactor('in') === DPI)
+  const mm = resolveCoverCanvas({ width: 25.4, height: 25.4, unit: 'mm', orientation: 'auto', followBody: false })
+  check('25.4mm ≈ 96px', Math.abs(mm.width - 96) <= 1, String(mm.width))
+  const inch = resolveCoverCanvas({ width: 1, height: 2, unit: 'in', orientation: 'auto', followBody: false })
+  check('1in × 2in = 96 × 192', inch.width === 96 && inch.height === 192, `${inch.width}x${inch.height}`)
+
+  // 5) 朝向归一
+  const land = resolveCoverCanvas({ width: 1080, height: 1920, unit: 'px', orientation: 'landscape', followBody: false })
+  check('横向自动交换宽高', land.width === 1920 && land.height === 1080, `${land.width}x${land.height}`)
+  const sq = resolveCoverCanvas({ width: 800, height: 1200, unit: 'px', orientation: 'square', followBody: false })
+  check('方形取较大值补齐', sq.width === 1200 && sq.height === 1200, `${sq.width}x${sq.height}`)
+  const auto = resolveCoverCanvas({ width: 800, height: 1200, unit: 'px', orientation: 'auto', followBody: false })
+  check('不约束时保持原值', auto.width === 800 && auto.height === 1200, `${auto.width}x${auto.height}`)
+
+  // 6) 边界校验：负值 / 0 / NaN / 超大 全部夹到合法区间
+  for (const [label, w, h] of [
+    ['负值', -500, -300],
+    ['零', 0, 0],
+    ['NaN', NaN, NaN],
+    ['超大', 999999, 999999],
+  ]) {
+    const r = resolveCoverCanvas({ width: w, height: h, unit: 'px', orientation: 'auto', followBody: false })
+    const ok =
+      Number.isFinite(r.width) && Number.isFinite(r.height) &&
+      r.width >= CANVAS_MIN_PX && r.width <= CANVAS_MAX_PX &&
+      r.height >= CANVAS_MIN_PX && r.height <= CANVAS_MAX_PX
+    check(`${label}尺寸被夹到合法区间`, ok, `${r.width}x${r.height}`)
+  }
+
+  // 7) 单位切换后仍不越界（英寸 + 极大值）
+  const big = resolveCoverCanvas({ width: 1000, height: 1000, unit: 'in', orientation: 'auto', followBody: false })
+  check('英寸大值被夹到上限', big.width === CANVAS_MAX_PX, String(big.width))
+}
+
 // ---------------------------------------------------------------- 主流程
 
 console.log('='.repeat(64))
@@ -344,6 +555,8 @@ testMonotonicity()
 testConstraint()
 testPathological()
 testOrphans()
+testCoverTexts()
+testCoverCanvas()
 
 console.log('\n' + '='.repeat(64))
 console.log(`通过 ${passed} 项，失败 ${failed} 项`)

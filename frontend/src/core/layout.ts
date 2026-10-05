@@ -2,6 +2,7 @@ import type {
   AppliedParams,
   Block,
   CoverItem,
+  CoverTextBox,
   Diagnostics,
   Geometry,
   Line,
@@ -15,6 +16,8 @@ import { breakIntoLines, breakRaw } from './lineBreaker'
 import { measurePageHeight, paginate } from './paginator'
 import { splitByLength, splitClauses, splitParagraphs, splitSentences } from './splitter'
 import { solvePageConstraint } from './constraint'
+import { defaultCoverTextMask } from '../types'
+import { pageCanvasSize } from './pageCanvas'
 
 /**
  * 排版编排层 —— 渲染管线第 ①~⑥ 步的实现。
@@ -223,40 +226,121 @@ export function buildContentBlocks(
   return { blocks, fixes }
 }
 
+/**
+ * 计算一张封面上全部文本元素的排版结果。
+ *
+ * **这是封面文本的唯一测量源**：渲染、拖拽命中框、吸附参考线都消费这里的
+ * `CoverTextBox[]`。拖拽层绝不允许自己再 measureText 算一套 —— 那正是
+ * D-15「可拖动文本框」当年回滚的原因。
+ *
+ * 坐标语义：
+ *  - 元素 `placed=false` → 锚点由 `cover.layout`（居中/靠上/靠下）决定；
+ *  - 元素 `placed=true`  → 锚点取归一化坐标，与画布尺寸解耦；
+ *  - 包围盒一律钳制到画布内，防止脏数据把文字画到画布外。
+ */
+export function layoutCoverTextBoxes(
+  cfg: StyleConfig,
+  item: CoverItem,
+  metrics: FontMetrics,
+): CoverTextBox[] {
+  // 封面尺寸与正文解耦：这里取的是「封面画布」，不是正文画布
+  const { width: W, height: H } = pageCanvasSize(cfg, 'cover')
+  const mask: MaskConfig = item.useOwnMask ? item.mask : cfg.mask
+  const maskPad = mask.type === 'card' ? mask.pad : 0
+  const safe = cfg.text.padding + maskPad
+
+  // 自动版式的纵向锚点（归一化）
+  const autoY = item.layout === 'top' ? safe / H : item.layout === 'bottom' ? 1 - safe / H : 0.5
+
+  const boxes: CoverTextBox[] = []
+
+  for (const el of item.texts) {
+    const text = el.text.trim()
+    if (!text || !el.enabled) continue
+
+    const maxWidth = Math.max(el.fontSize * 2, W * clamp(el.widthRatio, 0.2, 1))
+    metrics.setFont(cfg.text.fontFamily, el.fontSize, el.fontWeight, cfg.text.letterSpacing)
+    const lines = breakRaw(text, metrics, maxWidth).filter((l) => l.text.length > 0)
+    if (lines.length === 0) continue
+
+    const lineHeight = el.fontSize * 1.25
+    const w = Math.min(maxWidth, Math.max(...lines.map((l) => l.width)))
+    const h = lines.length * lineHeight
+
+    // 锚点 → 左上角
+    const anchorX = el.placed ? clamp(el.x, 0, 1) * W : W / 2
+    const anchorY = el.placed ? clamp(el.y, 0, 1) * H : autoY * H
+
+    let bx = el.align === 'left' ? anchorX : el.align === 'right' ? anchorX - w : anchorX - w / 2
+    let by = anchorY - h / 2
+
+    // 越界钳制：包围盒必须完整落在画布内
+    bx = clamp(bx, 0, Math.max(0, W - w))
+    by = clamp(by, 0, Math.max(0, H - h))
+
+    // 文本自带蒙版：面板 = 文字块按自身 mask.pad 外扩（card 形态）
+    // veil / gradient 形态覆盖整块；未启用时面板退化为文字块本身
+    const textMask = el.mask ?? defaultCoverTextMask()
+    const pad = el.maskEnabled && textMask.type === 'card' ? Math.max(0, textMask.pad) : 0
+    const panel = {
+      x: bx - pad,
+      y: by - pad,
+      w: w + pad * 2,
+      h: h + pad * 2,
+    }
+    // 面板同样钳制在画布内，避免蒙版溢出
+    panel.x = clamp(panel.x, 0, Math.max(0, W - panel.w))
+    panel.y = clamp(panel.y, 0, Math.max(0, H - panel.h))
+
+    boxes.push({
+      elementId: el.id,
+      lines,
+      x: bx,
+      y: by,
+      w,
+      h,
+      fontSize: el.fontSize,
+      fontWeight: el.fontWeight,
+      color: el.color,
+      align: el.align,
+      mask: textMask,
+      maskEnabled: el.maskEnabled,
+      z: Number.isFinite(el.z) ? el.z : 0,
+      panel,
+      overlapped: false,
+    })
+  }
+
+  // 按 z 升序渲染：数值大的后绘制（盖在上面）；同 z 保持数组顺序（稳定）
+  boxes.sort((a, b) => a.z - b.z)
+  markOverlaps(boxes)
+  return boxes
+}
+
+/** 两两相交检测，给出重叠标记（仅提示，不阻断渲染）。 */
+function markOverlaps(boxes: CoverTextBox[]): void {
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i]
+      const b = boxes[j]
+      if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) {
+        a.overlapped = true
+        b.overlapped = true
+      }
+    }
+  }
+}
+
 /** 构建单张封面页。 */
 function buildOneCoverPage(cfg: StyleConfig, item: CoverItem, metrics: FontMetrics): Page {
-  const mask: MaskConfig = item.useOwnMask ? item.mask : cfg.mask
-  const padding = cfg.text.padding
-  const maskPad = mask.type === 'card' ? mask.pad : 0
-  const availW = Math.max(cfg.canvas.width * 0.3, cfg.canvas.width - padding * 2 - maskPad * 2)
-
-  const family = cfg.text.fontFamily
-  const spacing = cfg.text.letterSpacing
-
-  const titleSize = item.titleFontSize
-  metrics.setFont(family, titleSize, item.titleWeight, spacing)
-  const titleLines = item.title.trim()
-    ? breakRaw(item.title, metrics, availW).filter((l) => l.text.length > 0)
-    : []
-
-  const subSize = Math.max(16, Math.round(titleSize * 0.42))
-  const subWeight = item.titleWeight >= 700 ? 400 : 300
-  metrics.setFont(family, subSize, subWeight, spacing)
-  const subtitleLines = item.subtitle.trim()
-    ? breakRaw(item.subtitle, metrics, availW).filter((l) => l.text.length > 0)
-    : []
-
-  const lineHeight = titleSize * 1.25
-  const usedHeight = titleLines.length * lineHeight + subtitleLines.length * subSize * 1.6
-
+  const coverTextBoxes = layoutCoverTextBoxes(cfg, item, metrics)
   return {
     index: 0,
     kind: 'cover',
     coverId: item.id,
     blocks: [],
-    titleLines,
-    subtitleLines,
-    usedHeight,
+    coverTextBoxes,
+    usedHeight: coverTextBoxes.reduce((sum, b) => sum + b.h, 0),
   }
 }
 

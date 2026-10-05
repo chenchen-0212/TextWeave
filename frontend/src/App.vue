@@ -18,6 +18,7 @@ import PreviewPane from './components/PreviewPane.vue'
 import ThumbnailStrip from './components/ThumbnailStrip.vue'
 
 import CanvasParams from './components/params/CanvasParams.vue'
+import CoverCanvasParams from './components/params/CoverCanvasParams.vue'
 import BackgroundParams from './components/params/BackgroundParams.vue'
 import MaskParams from './components/params/MaskParams.vue'
 import TextParams from './components/params/TextParams.vue'
@@ -105,6 +106,7 @@ onBeforeUnmount(() => {
       <div class="pane">
         <div class="pane-scroll">
           <CanvasParams />
+          <CoverCanvasParams />
           <BackgroundParams />
           <MaskParams />
           <TextParams />

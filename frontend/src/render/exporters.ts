@@ -3,6 +3,7 @@ import * as api from '../backend/api'
 import type { RenderContext } from './CanvasRenderer'
 import { CanvasRenderer } from './CanvasRenderer'
 import { buildFilename, extForFormat, joinDir, renderSubfolder } from '../utils/filename'
+import { pageCanvasSize } from '../core/pageCanvas'
 
 /**
  * 导出器（对应决策 D-14：默认逐张落盘）。
@@ -66,11 +67,11 @@ function stripDataUrl(dataUrl: string): string {
 
 /**
  * 取主封面标题，用于文件名模板的 {title} 变量。
- * 多封面场景下以第一张启用封面的标题作为整个系列的代表名。
+ * 多封面 / 多文本元素场景下以第一张启用封面的首个文本元素作为系列代表名。
  */
 function primaryCoverTitle(cfg: StyleConfig): string {
   const first = cfg.cover.items.find((c) => c.enabled) ?? cfg.cover.items[0]
-  return first?.title?.trim() ?? ''
+  return first?.texts?.[0]?.text?.trim() ?? ''
 }
 
 /** 解析任务标签：选项覆盖 > 配置值（渠道名在渠道节） */
@@ -198,7 +199,9 @@ export function renderThumbnail(
   renderer: CanvasRenderer,
   targetWidth: number,
 ): string {
-  const scale = targetWidth / rc.cfg.canvas.width
+  // 缩放基准取该页自己的画布宽度（封面可能与正文不同尺寸）
+  const { width } = pageCanvasSize(rc.cfg, page.kind)
+  const scale = targetWidth / Math.max(1, width)
   renderer.renderPage(page, rc, scale)
   // 缩略图统一用 JPEG 以便复用，质量取中高
   return renderer.toDataURL('jpeg', 0.82)

@@ -16,9 +16,12 @@ import type {
 import {
   CANVAS_PRESETS,
   MAX_COVERS,
+  MAX_COVER_TEXTS,
   MAX_OVERLAY_ITEMS,
   defaultConfig,
   defaultCoverItem,
+  defaultCoverText,
+  defaultCoverTextMask,
   defaultMaskOfType,
   defaultOverlayImageItem,
   defaultOverlayTextItem,
@@ -180,12 +183,22 @@ export const useAppStore = defineStore('app', () => {
   /**
    * 主封面标题。
    * 用于文件名模板的 {title} 变量与快速存模板时的默认命名 ——
-   * 多封面场景下取第一张启用封面的标题作为系列代表。
+   * 多封面场景下取第一张启用封面的**首个文本元素**作为系列代表。
    */
   const primaryCoverTitle = computed(() => {
     const first = cfg.cover.items.find((c) => c.enabled) ?? cfg.cover.items[0]
-    return first?.title?.trim() ?? ''
+    return first?.texts?.[0]?.text?.trim() ?? ''
   })
+
+  /** 画布上选中的封面文本元素 id（拖拽层与编辑器共享） */
+  const selectedCoverTextId = ref('')
+
+  /** 拖拽撤销快照：仅存最近一次拖拽的起点坐标 */
+  const coverTextUndo = ref<{
+    coverId: string
+    elementId: string
+    before: { x: number; y: number; placed: boolean }
+  } | null>(null)
 
   // 导出专用的离屏 canvas（与预览 canvas 分开，避免互相干扰）
   let exportRenderer: CanvasRenderer | null = null
@@ -601,10 +614,16 @@ export const useAppStore = defineStore('app', () => {
     const base = activeCover()
     const item = defaultCoverItem(cfg.cover.items.length + 1)
     if (base) {
-      item.titleFontSize = base.titleFontSize
-      item.titleWeight = base.titleWeight
+      // 文本样式逐元素继承（不含内容与位置：新封面重新排版）
+      item.texts = base.texts.map((t) => ({
+        ...JSON.parse(JSON.stringify(t)),
+        id: `ctext-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        text: '',
+        placed: false,
+        // 蒙版开关不继承：新封面从干净状态开始
+        maskEnabled: false,
+      }))
       item.layout = base.layout
-      item.color = base.color
       item.useOwnMask = base.useOwnMask
       item.mask = JSON.parse(JSON.stringify(base.mask))
       item.background = JSON.parse(JSON.stringify(base.background))
@@ -630,7 +649,12 @@ export const useAppStore = defineStore('app', () => {
     const src = cfg.cover.items[idx]
     const copy: CoverItem = JSON.parse(JSON.stringify(src))
     copy.id = `cover-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
-    copy.title = src.title ? `${src.title} 副本` : ''
+    // 文本元素需要新的本地 id；首元素标题加「副本」便于区分
+    copy.texts = src.texts.map((t) => ({
+      ...t,
+      id: `ctext-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    }))
+    if (copy.texts[0]?.text) copy.texts[0].text = `${copy.texts[0].text} 副本`
 
     cfg.cover.items.splice(idx + 1, 0, copy)
     cfg.cover.activeId = copy.id
@@ -977,6 +1001,151 @@ export const useAppStore = defineStore('app', () => {
     } catch (e) {
       exportError.value = e instanceof Error ? e.message : '导出失败'
     }
+  }
+
+  // ------------------------------------------------------------ 封面文本元素
+
+  function findCoverText(coverId: string, elementId: string) {
+    const cover = cfg.cover.items.find((c) => c.id === coverId)
+    const el = cover?.texts.find((t) => t.id === elementId)
+    return el ? { cover, el } : null
+  }
+
+  /** 新增一个封面文本元素（继承首个元素的样式，位置自动排布）。 */
+  function addCoverText(coverId: string): void {
+    const cover = cfg.cover.items.find((c) => c.id === coverId)
+    if (!cover) return
+    if (cover.texts.length >= MAX_COVER_TEXTS) {
+      layoutMessage.value = `单张封面最多 ${MAX_COVER_TEXTS} 个文本元素`
+      return
+    }
+    const base = cover.texts[0]
+    const el = defaultCoverText({
+      text: '',
+      fontSize: base?.fontSize ?? 96,
+      fontWeight: base?.fontWeight ?? 700,
+      color: base?.color ?? '',
+      align: base?.align ?? 'center',
+      widthRatio: base?.widthRatio ?? 0.86,
+      // 多元素时纵向错开，避免一上来就叠在一起
+      y: Math.min(0.92, (cover.texts.length + 1) * 0.18),
+      // 层级取当前最大值 + 1，新元素默认盖在最上层
+      z: cover.texts.reduce((m, t) => Math.max(m, t.z), 0) + 1,
+      // 蒙版样式继承首个元素，开关保持关闭（避免一加就糊住画面）
+      mask: JSON.parse(JSON.stringify(base?.mask ?? defaultCoverTextMask())),
+      maskEnabled: false,
+    })
+    cover.texts.push(el)
+    selectedCoverTextId.value = el.id
+    scheduleRebuild(0)
+  }
+
+  /** 删除一个文本元素；至少保留一个（空元素），避免封面无任何可编辑入口。 */
+  function removeCoverText(coverId: string, elementId: string): void {
+    const cover = cfg.cover.items.find((c) => c.id === coverId)
+    if (!cover) return
+    if (cover.texts.length <= 1) {
+      layoutMessage.value = '至少保留一个文本元素（可清空内容）'
+      return
+    }
+    const idx = cover.texts.findIndex((t) => t.id === elementId)
+    if (idx < 0) return
+    cover.texts.splice(idx, 1)
+    if (selectedCoverTextId.value === elementId) selectedCoverTextId.value = ''
+    scheduleRebuild(0)
+  }
+
+  /**
+   * 移动封面文本元素到归一化坐标（拖拽过程中高频调用）。
+   *
+   * 坐标一律归一化并夹到 [0,1]；排版层还会再做一次包围盒钳制，
+   * 因此这里不需要知道画布尺寸，也不怕脏数据。
+   */
+  function moveCoverText(coverId: string, elementId: string, x: number, y: number): void {
+    const hit = findCoverText(coverId, elementId)
+    if (!hit) return
+    hit.el.x = Math.min(1, Math.max(0, x))
+    hit.el.y = Math.min(1, Math.max(0, y))
+    hit.el.placed = true
+    scheduleRebuild(0)
+  }
+
+  /** 方向键微调（step 为逻辑像素，内部换算成归一化增量）。 */
+  function nudgeCoverText(coverId: string, elementId: string, dxPx: number, dyPx: number): void {
+    const hit = findCoverText(coverId, elementId)
+    if (!hit) return
+    const W = cfg.canvas.width || 1
+    const H = cfg.canvas.height || 1
+    moveCoverText(coverId, elementId, hit.el.x + dxPx / W, hit.el.y + dyPx / H)
+  }
+
+  /** 把元素交还给自动版式（清掉 placed 标记）。 */
+  function resetCoverTextAuto(coverId: string, elementId: string): void {
+    const hit = findCoverText(coverId, elementId)
+    if (!hit) return
+    hit.el.placed = false
+    scheduleRebuild(0)
+  }
+
+  /** 垂直均分：把该封面的全部文本元素按顺序均分到安全区内的纵向区间。 */
+  function distributeCoverTexts(coverId: string): void {
+    const cover = cfg.cover.items.find((c) => c.id === coverId)
+    if (!cover || cover.texts.length === 0) return
+    const n = cover.texts.length
+    cover.texts.forEach((el, i) => {
+      el.placed = true
+      el.y = (i + 1) / (n + 1)
+    })
+    scheduleRebuild(0)
+  }
+
+  /** 记录拖拽起点，供单步撤销使用。 */
+  function beginCoverTextMove(coverId: string, elementId: string): void {
+    const hit = findCoverText(coverId, elementId)
+    if (!hit) return
+    coverTextUndo.value = {
+      coverId,
+      elementId,
+      before: { x: hit.el.x, y: hit.el.y, placed: hit.el.placed },
+    }
+  }
+
+  function undoCoverTextMove(): void {
+    const snap = coverTextUndo.value
+    if (!snap) return
+    const hit = findCoverText(snap.coverId, snap.elementId)
+    if (hit) {
+      hit.el.x = snap.before.x
+      hit.el.y = snap.before.y
+      hit.el.placed = snap.before.placed
+      scheduleRebuild(0)
+    }
+    coverTextUndo.value = null
+  }
+
+  /** 切换某个文本的蒙版启用状态（文本图层上的独立开关）。 */
+  function toggleCoverTextMask(coverId: string, elementId: string): void {
+    const hit = findCoverText(coverId, elementId)
+    if (!hit) return
+    hit.el.maskEnabled = !hit.el.maskEnabled
+    scheduleRebuild(0)
+  }
+
+  /** 调整文本层级：delta 为 +1 上移（更靠上）。 */
+  function moveCoverTextLayer(coverId: string, elementId: string, delta: number): void {
+    const cover = cfg.cover.items.find((c) => c.id === coverId)
+    if (!cover) return
+    const idx = cover.texts.findIndex((t) => t.id === elementId)
+    if (idx < 0) return
+    const target = Math.max(0, Math.min(cover.texts.length - 1, idx + delta))
+    if (target === idx) return
+    const [moved] = cover.texts.splice(idx, 1)
+    cover.texts.splice(target, 0, moved)
+    // 重排后按新顺序重写 z，保证叠放次序与列表顺序一致
+    cover.texts.forEach((t, i) => {
+      t.z = i
+    })
+    scheduleRebuild(0)
   }
 
   // ------------------------------------------------------------ 引导元素图层（N-03）
@@ -1327,6 +1496,19 @@ export const useAppStore = defineStore('app', () => {
     removeCover,
     moveCover,
     toggleCover,
+    // 封面文本元素（拖拽定位）
+    selectedCoverTextId,
+    coverTextUndo,
+    addCoverText,
+    removeCoverText,
+    toggleCoverTextMask,
+    moveCoverTextLayer,
+    moveCoverText,
+    nudgeCoverText,
+    resetCoverTextAuto,
+    distributeCoverTexts,
+    beginCoverTextMove,
+    undoCoverTextMove,
     pickCoverBackground,
     setCoverBackground,
     clearCoverBackground,

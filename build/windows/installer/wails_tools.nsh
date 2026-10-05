@@ -14,7 +14,7 @@
     !define INFO_PRODUCTNAME "文织 TextWeave"
 !endif
 !ifndef INFO_PRODUCTVERSION
-    !define INFO_PRODUCTVERSION "0.3.0"
+    !define INFO_PRODUCTVERSION "0.4.0"
 !endif
 !ifndef INFO_COPYRIGHT
     !define INFO_COPYRIGHT "Copyright © 2026 TextWeave"

@@ -9,6 +9,7 @@ import {
 import { drawMask } from './masks'
 import { drawContentText, drawCoverText } from './textPainter'
 import { drawOverlays } from './overlay'
+import { pageCanvasSize } from '../core/pageCanvas'
 
 /**
  * Canvas 合成器（渲染管线第 ⑦ 步）。
@@ -73,8 +74,10 @@ export class CanvasRenderer {
   renderPage(page: Page, rc: RenderContext, pixelScale?: number): void {
     const { cfg, geo, background } = rc
     const scale = pixelScale ?? cfg.canvas.scale
-    const logicalW = cfg.canvas.width
-    const logicalH = cfg.canvas.height
+    // 画布尺寸按页面类型解析：封面用封面画布，正文用正文画布（v0.4.0 解耦）
+    const size = pageCanvasSize(cfg, page.kind)
+    const logicalW = size.width
+    const logicalH = size.height
     const pixelW = Math.max(1, Math.round(logicalW * scale))
     const pixelH = Math.max(1, Math.round(logicalH * scale))
 
@@ -157,13 +160,21 @@ export class CanvasRenderer {
     }
 
     // 3) 蒙版 —— 封面可用自己的蒙版，否则沿用正文蒙版
-    const mask = cover ? (cover.useOwnMask ? cover.mask : cfg.mask) : cfg.mask
+    //
+    // 蒙版绘制函数按 cfg.canvas 取画布尺寸；封面页画布与正文不同，
+    // 这里传一份把 canvas 换成当前页尺寸的浅拷贝（正文页直接用原对象，零开销）。
+    const pageCfg: StyleConfig =
+      page.kind === 'cover'
+        ? { ...cfg, canvas: { ...cfg.canvas, width: logicalW, height: logicalH } }
+        : cfg
+
+    const mask = cover ? (cover.useOwnMask ? cover.mask : pageCfg.mask) : pageCfg.mask
     const maskGeo: Geometry =
       mask.type === 'card' && mask.pad !== geo.maskPad ? { ...geo, maskPad: mask.pad } : geo
 
     drawMask(
       ctx,
-      cfg,
+      pageCfg,
       mask,
       maskGeo,
       page.usedHeight,
@@ -173,14 +184,14 @@ export class CanvasRenderer {
 
     // 4) 文字
     if (cover) {
-      drawCoverText(ctx, page, cfg, cover)
+      drawCoverText(ctx, page, pageCfg, cover)
     } else {
       drawContentText(ctx, page, cfg, geo)
     }
 
     // 5) 引导元素图层（N-03）：在正文文字之上，全页位置一致。
     //    测量用默认回调：drawTextItem 自身会先设置与元素一致的 font 再测量。
-    drawOverlays(ctx, cfg, page.kind, rc.overlayImages)
+    drawOverlays(ctx, pageCfg, page.kind, rc.overlayImages)
 
     ctx.setTransform(1, 0, 0, 1, 0, 0)
   }

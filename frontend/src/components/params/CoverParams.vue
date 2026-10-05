@@ -42,7 +42,8 @@ function select(id: string): void {
 function coverLabel(index: number, id: string): string {
   const c = covers.value[index]
   void id
-  const title = c?.title?.trim()
+  // v0.4.0：标题下沉为文本元素，取首个非空文本
+  const title = c?.texts?.map((t) => t.text?.trim()).find(Boolean)
   return title || `封面 ${index + 1}`
 }
 
@@ -91,7 +92,7 @@ function hasOwnBg(id: string): boolean {
           @change="store.toggleCover(c.id)"
         />
         <span class="cover-index">{{ i + 1 }}</span>
-        <span class="cover-title" :title="c.title">{{ coverLabel(i, c.id) }}</span>
+        <span class="cover-title" :title="coverLabel(i, c.id)">{{ coverLabel(i, c.id) }}</span>
         <span class="cover-tag" :class="{ own: hasOwnBg(c.id) }">
           {{ hasOwnBg(c.id) ? '专属背景' : '沿用正文' }}
         </span>

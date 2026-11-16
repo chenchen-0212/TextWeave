@@ -13,7 +13,8 @@ export type TextAlign = 'left' | 'justify' | 'center'
 export type OutputFormat = 'png' | 'jpeg' | 'webp'
 export type CoverLayout = 'center' | 'top' | 'bottom'
 export type GradientDirection = 'top' | 'bottom' | 'both'
-export type CardPosition = 'stretchToFill' | 'center' | 'top' | 'bottom'
+/** custom：只按归一化矩形绘制蒙版，不参与任何排版几何计算 */
+export type CardPosition = 'stretchToFill' | 'center' | 'top' | 'bottom' | 'custom'
 export type FontSource = 'system' | 'user'
 
 // ------------------------------------------------------------------ 画布
@@ -107,6 +108,14 @@ export interface CardMask {
   /** 卡片区域毛玻璃强度 */
   blur: number
   position: CardPosition
+  /**
+   * 自定义矩形（仅 position='custom' 生效）：相对画布的归一化比例 0~1，
+   * cx/cy 为左上角，cw/ch 为宽高。**只影响蒙版绘制位置，不改变文字排版与可用区**。
+   */
+  cx?: number
+  cy?: number
+  cw?: number
+  ch?: number
 }
 
 export interface VeilMask {
@@ -214,6 +223,63 @@ export interface CoverBackground {
 export type CoverTextAlign = 'left' | 'center' | 'right'
 
 /**
+ * 文本级蒙版（挂在封面文本图层上）。
+ *
+ * 与正文/封面底衬的 `MaskConfig` **刻意分开定义**，原因有二：
+ *  1. 底衬的 `CardMask.pad` 参与几何计算（getTextOrigin / getCardRegion / computeGeometry），
+ *     改它会波及正文排版；文本蒙版只影响自身面板，两者不能混用；
+ *  2. 文本面板是「贴合文字块」的局部区域，没有 `position`（铺满/居中/靠上）对齐语义，
+ *     也不支持毛玻璃（局部面板取背景做模糊收益低、成本高）。
+ *
+ * 内边距拆成 **padX（水平）/ padY（垂直）** 两组独立参数：
+ * 竖排文案、条状 CTA、窄高卡片等场景需要不同的横向/纵向留白。
+ * 单位为**逻辑像素**（与正文 `text.padding` 一致），不随画布单位（px/mm/in）换算。
+ */
+export interface CoverTextMaskCard {
+  type: 'card'
+  color: string
+  alpha: number
+  radius: number
+  /** 水平内边距（左右） */
+  padX: number
+  /** 垂直内边距（上下） */
+  padY: number
+}
+
+/** 纯色遮罩：覆盖整块文字区域 */
+export interface CoverTextMaskVeil {
+  type: 'veil'
+  color: string
+  alpha: number
+}
+
+/** 渐变遮罩：覆盖整块文字区域 */
+export interface CoverTextMaskGradient {
+  type: 'gradient'
+  color: string
+  maxAlpha: number
+  direction: 'top' | 'bottom' | 'both'
+  solidRatio: number
+  transparentRatio: number
+}
+
+export type CoverTextMask = CoverTextMaskCard | CoverTextMaskVeil | CoverTextMaskGradient
+
+/** 文本蒙版内边距的合法区间（逻辑像素） */
+export const COVER_TEXT_PAD_MIN = 0
+export const COVER_TEXT_PAD_MAX = 400
+
+/** 文本蒙版形态选项（供界面使用） */
+export const COVER_TEXT_MASK_TYPES: ReadonlyArray<{
+  value: CoverTextMask['type']
+  label: string
+}> = [
+  { value: 'card', label: '圆角卡片' },
+  { value: 'veil', label: '纯色遮罩' },
+  { value: 'gradient', label: '渐变遮罩' },
+]
+
+/**
  * 封面文本元素（统一文本蒙版模块）。
  *
  * 坐标一律用**归一化值**（0~1，相对画布宽高），与画布尺寸解耦：
@@ -221,14 +287,21 @@ export type CoverTextAlign = 'left' | 'center' | 'right'
  *  - `placed=false` 表示用户没拖过，由 `cover.layout` 自动排布。
  *
  * 每个文本**自带一块蒙版**（`mask`），挂载在文本图层上而非封面公共蒙版：
- * 蒙版面板由该文本的排版盒外扩 `mask.pad` 得到，因此「显示范围由自身蒙版决定」；
- * `z` 决定多个文本蒙版之间的叠放次序（数值大的盖在上面）；`maskEnabled` 是该
- * 文本蒙版的独立开关。封面级 `CoverItem.mask` 仍作为整页底衬保留，两者互不干扰。
+ * 蒙版面板由该文本的排版盒按 `mask.padX / mask.padY` 外扩得到，
+ * 因此「显示范围由自身蒙版决定」；`z` 决定多个文本蒙版之间的叠放次序
+ * （数值大的盖在上面）；`maskEnabled` 是该文本蒙版的独立开关。
+ * 封面级 `CoverItem.mask` 仍作为整页底衬保留，两者互不干扰。
  */
 export interface CoverTextElement {
   id: string
   enabled: boolean
   text: string
+  /** 空串表示跟随正文文字字体 */
+  fontFamily: string
+  /** 与正文同源的字体来源 */
+  fontSource: FontSource
+  /** 用户字体的文件路径，系统字体或跟随正文时为空 */
+  fontPath: string
   fontSize: number
   fontWeight: 300 | 400 | 500 | 700
   /** 空串表示沿用正文文字颜色 */
@@ -243,7 +316,7 @@ export interface CoverTextElement {
   /** 是否已被用户拖拽定位 */
   placed: boolean
   /** 该文本自己的蒙版（文本图层上，不使用封面公共蒙版） */
-  mask: MaskConfig
+  mask: CoverTextMask
   /** 该文本蒙版的独立开关 */
   maskEnabled: boolean
   /** 叠放次序，数值大的后绘制（盖在上面）；默认按数组顺序 */
@@ -496,21 +569,28 @@ export interface CoverTextBox {
   y: number
   w: number
   h: number
+  /** 解析后的字体族（元素自身为空时取正文文字字体） */
+  fontFamily: string
   fontSize: number
   fontWeight: number
   color: string
   align: CoverTextAlign
   /** 该文本自己的蒙版（用于渲染局部面板） */
-  mask: MaskConfig
+  mask: CoverTextMask
   /** 该文本蒙版是否启用 */
   maskEnabled: boolean
   /** 叠放次序（render 用） */
   z: number
   /**
-   * 蒙版面板区域（逻辑坐标）：文字块按 mask.pad 外扩得到。
+   * 蒙版面板区域（逻辑坐标）：文字块按 mask.pad 外扩得到，
+   * 且**宽高不会超过封面画布**（内边距过大时按封面尺寸封顶）。
    * maskEnabled=false 或非 card 形态时退化为文字块本身（veil/gradient 覆盖整块）。
    */
   panel: { x: number; y: number; w: number; h: number }
+  /** 排版层二次防御后实际生效的水平内边距（观测/测试用） */
+  padXUsed: number
+  /** 排版层二次防御后实际生效的垂直内边距（观测/测试用） */
+  padYUsed: number
   /** 是否与其他文本元素重叠（诊断提示用，不阻断渲染） */
   overlapped: boolean
 }
@@ -716,6 +796,10 @@ export function defaultCoverText(overrides: Partial<CoverTextElement> = {}): Cov
     id: `ctext-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     enabled: true,
     text: '',
+    // 默认跟随正文字体，旧数据升级后外观不变
+    fontFamily: '',
+    fontSource: 'system',
+    fontPath: '',
     fontSize: 96,
     fontWeight: 700,
     color: '',
@@ -732,16 +816,42 @@ export function defaultCoverText(overrides: Partial<CoverTextElement> = {}): Cov
   }
 }
 
-/** 文本级蒙版默认值（比封面底蒙版更收敛：pad 小、无毛玻璃） */
-export function defaultCoverTextMask(): MaskConfig {
+/** 文本级蒙版默认值（比封面底蒙版更收敛：pad 小、无毛玻璃、无 position） */
+export function defaultCoverTextMask(): CoverTextMaskCard {
   return {
     type: 'card',
     color: '#000000',
     alpha: 0.45,
     radius: 18,
-    pad: 28,
-    blur: 0,
-    position: 'center',
+    padX: 28,
+    padY: 28,
+  }
+}
+
+/**
+ * 切换文本蒙版形态：按形态给一份合理默认。
+ * 用重载声明保证「传入字面量 → 返回对应形态的具体类型」，
+ * 否则调用方拿到的会是联合类型，字段访问就失去类型收窄。
+ */
+export function defaultCoverTextMaskOfType(type: 'card'): CoverTextMaskCard
+export function defaultCoverTextMaskOfType(type: 'veil'): CoverTextMaskVeil
+export function defaultCoverTextMaskOfType(type: 'gradient'): CoverTextMaskGradient
+export function defaultCoverTextMaskOfType(type: CoverTextMask['type']): CoverTextMask
+export function defaultCoverTextMaskOfType(type: CoverTextMask['type']): CoverTextMask {
+  switch (type) {
+    case 'veil':
+      return { type: 'veil', color: '#000000', alpha: 0.4 }
+    case 'gradient':
+      return {
+        type: 'gradient',
+        color: '#000000',
+        maxAlpha: 0.85,
+        direction: 'bottom',
+        solidRatio: 0.1,
+        transparentRatio: 0.4,
+      }
+    default:
+      return defaultCoverTextMask()
   }
 }
 
@@ -878,10 +988,15 @@ export const SHARE_CODE_PREFIX = 'TW1-'
  *  v3 —— 新增渠道节（channel.name / subfolderPattern / sizes，O-03 渠道模板包）。
  *  v4 —— 封面文本元素化（cover.items[].texts[]，可拖拽定位），副标题下线。
  *  v5 —— 封面画布独立（coverCanvas：宽/高/单位/朝向/是否跟随正文），与正文尺寸解耦。
+ *  v6 —— 文本蒙版独立编码，内边距拆为 padX（水平）/ padY（垂直）；旧码的单一 pad
+ *        在解码时迁移到两个字段，外观与升级前一致。
  *        引导元素（overlay）含本机图片路径，**不进分享码**，与输出目录同策略。
+ *  v7 —— 封面文本可独立指定字体（family + 来源，v0.5.1）；卡片蒙版追加自定义矩形
+ *        （position='custom' + 归一化 cx/cy/cw/ch）。两者都只追加在各自数组尾部，
+ *        旧码解码时按缺省值补齐，外观不变。
  * 解码端必须保留旧版分支，否则老分享码会解出一堆错位的值。
  */
-export const SHARE_PAYLOAD_VERSION = 5
+export const SHARE_PAYLOAD_VERSION = 7
 
 /** 封面数量上限 */
 export const MAX_COVERS = 20

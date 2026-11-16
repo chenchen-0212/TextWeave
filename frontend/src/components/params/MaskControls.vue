@@ -41,7 +41,13 @@ const POSITIONS = [
   { value: 'center', label: '居中' },
   { value: 'top', label: '靠上' },
   { value: 'bottom', label: '靠下' },
+  { value: 'custom', label: '自定义（只动蒙版）' },
 ]
+
+/** 自定义矩形的比例值 ↔ 界面百分数 */
+function pct(v: number | undefined, def: number): number {
+  return Math.round((v ?? def) * 100)
+}
 
 const DIRECTIONS = [
   { value: 'bottom', label: '底部' },
@@ -123,7 +129,44 @@ const fillLabel = computed(() => (card.value?.position === 'stretchToFill' ? '�
         :options="POSITIONS"
         @update:modelValue="(v) => patch('position', v)"
       />
-      <div class="field-hint">
+      <template v-if="card.position === 'custom'">
+        <ParamField
+          label="左"
+          :modelValue="pct(card.cx, 0.1)"
+          :min="0"
+          :max="100"
+          unit="%"
+          @update:modelValue="(v) => patch('cx', Number(v) / 100)"
+        />
+        <ParamField
+          label="上"
+          :modelValue="pct(card.cy, 0.1)"
+          :min="0"
+          :max="100"
+          unit="%"
+          @update:modelValue="(v) => patch('cy', Number(v) / 100)"
+        />
+        <ParamField
+          label="宽"
+          :modelValue="pct(card.cw, 0.8)"
+          :min="1"
+          :max="100"
+          unit="%"
+          @update:modelValue="(v) => patch('cw', Number(v) / 100)"
+        />
+        <ParamField
+          label="高"
+          :modelValue="pct(card.ch, 0.8)"
+          :min="1"
+          :max="100"
+          unit="%"
+          @update:modelValue="(v) => patch('ch', Number(v) / 100)"
+        />
+        <div class="field-hint">
+          自定义位置只改变蒙版的绘制区域，文字排版、字号与分页完全不受影响。
+        </div>
+      </template>
+      <div v-else class="field-hint">
         铺满模式下卡片每一页位置尺寸完全一致，系列一致性最强；其余定位会随内容高度变化。
       </div>
     </template>

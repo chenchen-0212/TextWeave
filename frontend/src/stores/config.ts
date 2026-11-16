@@ -240,12 +240,14 @@ export const useAppStore = defineStore('app', () => {
     try {
       await waitForFonts()
 
-      if (cfg.text.fontSource === 'user' && cfg.text.fontPath) {
-        const ok = await ensureFontLoaded(cfg.text.fontFamily, cfg.text.fontPath)
-        fontWarning.value = ok ? '' : '自定义字体加载失败，已回退到系统字体'
-      } else {
-        fontWarning.value = ''
-      }
+      // 正文与各封面文本可能用到不同的上传字体，全部注册后再排版
+      const userFonts = [cfg.text, ...cfg.cover.items.flatMap((c) => c.texts)].filter(
+        (f) => f.fontSource === 'user' && f.fontPath,
+      )
+      const results = await Promise.all(
+        userFonts.map((f) => ensureFontLoaded(f.fontFamily, f.fontPath)),
+      )
+      fontWarning.value = results.some((ok) => !ok) ? '自定义字体加载失败，已回退到系统字体' : ''
 
       const m = getMetrics()
       m.reset()
@@ -1022,6 +1024,10 @@ export const useAppStore = defineStore('app', () => {
     const base = cover.texts[0]
     const el = defaultCoverText({
       text: '',
+      // 字体随首个元素继承，新加的一块文字与现有封面对齐
+      fontFamily: base?.fontFamily ?? '',
+      fontSource: base?.fontSource ?? 'system',
+      fontPath: base?.fontPath ?? '',
       fontSize: base?.fontSize ?? 96,
       fontWeight: base?.fontWeight ?? 700,
       color: base?.color ?? '',
@@ -1304,26 +1310,31 @@ export const useAppStore = defineStore('app', () => {
 
   // ------------------------------------------------------------ 字体管理
 
-  async function chooseAndImportFont(): Promise<void> {
+  /** 导入字体文件。applyToBody=false 时只返回结果，由调用方决定作用位置（封面字体）。 */
+  async function chooseAndImportFont(applyToBody = true): Promise<FontEntry | null> {
     fontWarning.value = ''
     let src = ''
     try {
       src = await api.pickFontFile()
     } catch (e) {
       fontWarning.value = e instanceof Error ? e.message : '打开字体选择对话框失败'
-      return
+      return null
     }
-    if (!src) return
+    if (!src) return null
     try {
       const entry = await api.importFont(src)
-      if (!entry) return
+      if (!entry) return null
       await loadFonts()
-      cfg.text.fontFamily = entry.family
-      cfg.text.fontSource = 'user'
-      cfg.text.fontPath = entry.path
-      scheduleRebuild(0)
+      if (applyToBody) {
+        cfg.text.fontFamily = entry.family
+        cfg.text.fontSource = 'user'
+        cfg.text.fontPath = entry.path
+        scheduleRebuild(0)
+      }
+      return entry
     } catch (e) {
       fontWarning.value = e instanceof Error ? e.message : '字体导入失败'
+      return null
     }
   }
 

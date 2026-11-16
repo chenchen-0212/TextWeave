@@ -12,7 +12,10 @@ import type {
   TemplateSharePayload,
   VeilMask,
 } from '../types'
+import type { CoverTextMask } from '../types'
 import {
+  COVER_TEXT_PAD_MAX,
+  COVER_TEXT_PAD_MIN,
   MAX_COVERS,
   MAX_COVER_TEXTS,
   MAX_EXPORT_SIZES,
@@ -26,6 +29,7 @@ import {
   defaultCoverMask,
   defaultCoverText,
   defaultCoverTextMask,
+  defaultCoverTextMaskOfType,
   defaultMaskOfType,
 } from '../types'
 
@@ -55,7 +59,7 @@ const FORMAT: EnumMap = { png: 'p', jpeg: 'j', webp: 'w' }
 const ALIGN: EnumMap = { left: 'l', justify: 'j', center: 'c' }
 const MASK_TYPE: EnumMap = { card: 'c', veil: 'v', gradient: 'g' }
 const GRADIENT_DIR: EnumMap = { top: 't', bottom: 'b', both: 'x' }
-const CARD_POS: EnumMap = { stretchToFill: 's', center: 'c', top: 't', bottom: 'b' }
+const CARD_POS: EnumMap = { stretchToFill: 's', center: 'c', top: 't', bottom: 'b', custom: 'x' }
 const COVER_LAYOUT: EnumMap = { center: 'c', top: 't', bottom: 'b' }
 /** 封面文本水平对齐（v4 新增） */
 const COVER_TEXT_ALIGN: EnumMap = { left: 'l', center: 'c', right: 'r' }
@@ -267,6 +271,111 @@ export function sanitizeConfig(
   }
 }
 
+/**
+ * 净化文本级蒙版（v0.5.0 起为独立类型，内边距拆 padX / padY）。
+ *
+ * 兼容旧数据：早期版本的文本蒙版复用了 `MaskConfig`，只有单一 `pad` 字段。
+ * 这里显式做一次迁移 —— 旧的 `pad` 同时赋给 padX 与 padY，
+ * 保证升级后**面板尺寸与升级前逐像素一致**（不会因为拆成两项而改变外观）。
+ */
+function sanitizeCoverTextMask(raw: unknown): CoverTextMask {
+  const d = defaultCoverTextMask()
+  const m = obj(raw)
+  const type = pick(m.type, ['card', 'veil', 'gradient'] as const, d.type)
+
+  if (type === 'veil') {
+    return { type: 'veil', color: color(m.color, '#000000'), alpha: num(m.alpha, 0.4, 0, 1) }
+  }
+  if (type === 'gradient') {
+    const grad = defaultCoverTextMaskOfType('gradient')
+    return {
+      type: 'gradient',
+      color: color(m.color, grad.color),
+      maxAlpha: num(m.maxAlpha, grad.maxAlpha, 0, 1),
+      direction: pick(m.direction, ['top', 'bottom', 'both'] as const, grad.direction),
+      solidRatio: num(m.solidRatio, grad.solidRatio, 0, 0.95),
+      // transparentRatio 必须大于 solidRatio，否则渐变区间退化
+      transparentRatio: num(m.transparentRatio, grad.transparentRatio, 0.01, 0.99),
+    }
+  }
+
+  // ---- card：内边距两组独立 ----
+  // 旧数据回退链：padX → padY → 旧 pad → 默认值
+  const legacyPad = num(m.pad, NaN, 0, COVER_TEXT_PAD_MAX)
+  const hasPadX = typeof m.padX === 'number' && Number.isFinite(m.padX)
+  const hasPadY = typeof m.padY === 'number' && Number.isFinite(m.padY)
+  const padX = hasPadX
+    ? int(m.padX, d.padX, COVER_TEXT_PAD_MIN, COVER_TEXT_PAD_MAX)
+    : hasPadY
+      ? int(m.padY, d.padY, COVER_TEXT_PAD_MIN, COVER_TEXT_PAD_MAX)
+      : Number.isFinite(legacyPad)
+        ? int(legacyPad, d.padX, COVER_TEXT_PAD_MIN, COVER_TEXT_PAD_MAX)
+        : d.padX
+  const padY = hasPadY
+    ? int(m.padY, d.padY, COVER_TEXT_PAD_MIN, COVER_TEXT_PAD_MAX)
+    : hasPadX
+      ? int(m.padX, d.padY, COVER_TEXT_PAD_MIN, COVER_TEXT_PAD_MAX)
+      : Number.isFinite(legacyPad)
+        ? int(legacyPad, d.padY, COVER_TEXT_PAD_MIN, COVER_TEXT_PAD_MAX)
+        : d.padY
+
+  return {
+    type: 'card',
+    color: color(m.color, d.color),
+    alpha: num(m.alpha, d.alpha, 0, 1),
+    radius: int(m.radius, d.radius, 0, 200),
+    padX,
+    padY,
+  }
+}
+
+/** 文本级蒙版 → 紧凑数组（v6：card 形态为 6 项，水平/垂直内边距各占一格） */
+function encodeCoverTextMask(m: CoverTextMask): unknown[] {
+  switch (m.type) {
+    case 'veil':
+      return ['v', m.color, r2(m.alpha)]
+    case 'gradient':
+      return [
+        'g',
+        m.color,
+        r2(m.maxAlpha),
+        enc(GRADIENT_DIR, m.direction, 'b'),
+        r2(m.solidRatio),
+        r2(m.transparentRatio),
+      ]
+    default:
+      // 'C' = v6 的 card 文本蒙版（padX/padY 分列）；旧版本用小写 'c' + 单一 pad
+      return ['C', m.color, r2(m.alpha), r0(m.radius), r0(m.padX), r0(m.padY)]
+  }
+}
+
+/** 紧凑数组 → 文本级蒙版（缺字段交给净化层补默认） */
+function decodeCoverTextMask(raw: unknown): Record<string, unknown> {
+  if (!Array.isArray(raw)) return {}
+  const g = (i: number): unknown => raw[i]
+  const kind = g(0)
+  if (kind === 'v') return { type: 'veil', color: g(1), alpha: g(2) }
+  if (kind === 'c') console.log('[DBG] decode legacy card mask:', JSON.stringify(raw))
+  if (kind === 'C') {
+    // v6 新格式：水平/垂直内边距各占一格
+    return { type: 'card', color: g(1), alpha: g(2), radius: g(3), padX: g(4), padY: g(5) }
+  }
+  if (kind === 'g') {
+    return {
+      type: 'gradient',
+      color: g(1),
+      maxAlpha: g(2),
+      direction: dec(GRADIENT_DIR, g(3), 'bottom'),
+      solidRatio: g(4),
+      transparentRatio: g(5),
+    }
+  }
+  // v5 及更早：encodeMask 的 7 项数组
+  // ['c', color, alpha, radius, pad, blur, position]，
+  // 取前 4 项并把旧 pad（index 4）交给净化层迁移到 padX / padY
+  return { type: 'card', color: g(1), alpha: g(2), radius: g(3), pad: g(4) }
+}
+
 /** 净化封面画布：单位/朝向走白名单，宽高先夹区间再由 resolveCoverCanvas 做像素夹取 */
 function sanitizeCoverCanvas(raw: unknown): StyleConfig['coverCanvas'] {
   const d = defaultCoverCanvas()
@@ -380,19 +489,28 @@ function sanitizeMask(raw: unknown, fallback: MaskConfig): MaskConfig {
 
   if (type === 'card') {
     const card = base as CardMask
-    return {
+    const position = pick(
+      m.position,
+      ['stretchToFill', 'center', 'top', 'bottom', 'custom'],
+      card.position,
+    )
+    const out: CardMask = {
       type: 'card',
       color: color(m.color, card.color),
       alpha: num(m.alpha, card.alpha, 0, 1),
       radius: int(m.radius, card.radius, 0, 200),
       pad: int(m.pad, card.pad, 0, 400),
       blur: int(m.blur, card.blur, 0, 40),
-      position: pick(
-        m.position,
-        ['stretchToFill', 'center', 'top', 'bottom'],
-        card.position,
-      ),
+      position,
     }
+    // 自定义矩形只在 custom 位置有意义，其余位置不写入，保持既有数据形状不变
+    if (position === 'custom') {
+      out.cx = num(m.cx, card.cx ?? 0.1, 0, 0.99)
+      out.cy = num(m.cy, card.cy ?? 0.1, 0, 0.99)
+      out.cw = num(m.cw, card.cw ?? 0.8, 0.01, 1)
+      out.ch = num(m.ch, card.ch ?? 0.8, 0.01, 1)
+    }
+    return out
   }
 
   if (type === 'veil') {
@@ -482,6 +600,7 @@ function sanitizeCoverItem(raw: unknown, index: number, keepPaths: boolean): Cov
       : // 旧结构：把主标题搬进第一个元素
         [{ ...(o as Record<string, unknown>), text: o.title, legacy: true }],
     o,
+    keepPaths,
   )
 
   return {
@@ -496,7 +615,11 @@ function sanitizeCoverItem(raw: unknown, index: number, keepPaths: boolean): Cov
 }
 
 /** 净化封面文本元素：逐项夹取 + 限量；空数组补一个默认元素。 */
-function sanitizeCoverTexts(raw: unknown, legacy: Record<string, unknown>): CoverTextElement[] {
+function sanitizeCoverTexts(
+  raw: unknown,
+  legacy: Record<string, unknown>,
+  keepPaths: boolean,
+): CoverTextElement[] {
   const list = Array.isArray(raw) ? raw : []
   const out: CoverTextElement[] = []
   const seen = new Set<string>()
@@ -514,6 +637,10 @@ function sanitizeCoverTexts(raw: unknown, legacy: Record<string, unknown>): Cove
       id,
       enabled: bool(t.enabled, true),
       text: str(t.text, '', 200),
+      // 字体族可随分享码传递；字体路径是本机资源，规则与正文 text.fontPath 一致
+      fontFamily: str(t.fontFamily, '', 100),
+      fontSource: pick(t.fontSource, ['system', 'user'], 'system'),
+      fontPath: keepPaths ? str(t.fontPath, '', 500) : '',
       fontSize: int(
         isLegacy ? legacy.titleFontSize : t.fontSize,
         isLegacy ? 96 : 96,
@@ -536,7 +663,7 @@ function sanitizeCoverTexts(raw: unknown, legacy: Record<string, unknown>): Cove
       widthRatio: num(t.widthRatio, 0.86, 0.2, 1),
       placed: bool(t.placed, false),
       // 文本自带蒙版：缺失时给一份默认（且默认关闭），旧数据外观不变
-      mask: sanitizeMask(t.mask, defaultCoverTextMask()),
+      mask: sanitizeCoverTextMask(t.mask),
       maskEnabled: bool(t.maskEnabled, false),
       // z 缺省按数组顺序，保证旧数据的叠放次序与升级前一致
       z: int(t.z, out.length, -MAX_COVER_TEXTS, MAX_COVER_TEXTS),
@@ -615,6 +742,11 @@ function encodeMask(mask: MaskConfig): unknown[] {
         r0(mask.pad),
         r0(mask.blur),
         enc(CARD_POS, mask.position, 's'),
+        // v7 追加：自定义矩形（归一化比例），非 custom 位置时全为默认值
+        r3(mask.cx ?? 0.1),
+        r3(mask.cy ?? 0.1),
+        r3(mask.cw ?? 0.8),
+        r3(mask.ch ?? 0.8),
       ]
     case 'veil':
       return ['v', mask.color, r2(mask.alpha), r2(mask.topBoost), r2(mask.bottomBoost)]
@@ -646,6 +778,11 @@ function decodeMask(raw: unknown, fallback: MaskConfig): MaskConfig {
         pad: raw[4],
         blur: raw[5],
         position: dec(CARD_POS, raw[6], 'stretchToFill'),
+        // v7 尾部四格；旧码缺失时交给 sanitize 补默认
+        cx: raw[7],
+        cy: raw[8],
+        cw: raw[9],
+        ch: raw[10],
       },
       fallback,
     )
@@ -775,10 +912,13 @@ function encodeCoverText(t: CoverTextElement): unknown[] {
     r3(t.y),
     r2(t.widthRatio),
     t.placed ? 1 : 0,
-    // ---- v4 追加：文本级蒙版 ----
+    // ---- v4 追加：文本级蒙版（v6 起为独立编码，padX/padY 分列）----
     t.maskEnabled ? 1 : 0,
-    encodeMask(mask),
+    encodeCoverTextMask(mask),
     r0(t.z),
+    // ---- v7 追加：元素字体（family + 来源；路径与本机相关，不进分享码）----
+    str(t.fontFamily ?? '', '', 100),
+    enc(FONT_SOURCE, t.fontSource ?? 'system', 's'),
   ]
 }
 
@@ -835,8 +975,11 @@ function decodeCover(raw: unknown, index: number, keepPaths: boolean, legacy = f
           placed: e[9] === 1,
           // 尾部三件套在早期 v4 分享码里不存在 → 交给 sanitize 补默认（蒙版关闭）
           maskEnabled: e[10] === 1,
-          mask: decodeMask(e[11], defaultCoverTextMask()),
+          mask: decodeCoverTextMask(e[11]),
           z: e[12] === undefined ? i : e[12],
+          // v7 尾部两格；旧码缺失时 sanitize 补「跟随正文」
+          fontFamily: e[13],
+          fontSource: e[14] === undefined ? 'system' : dec(FONT_SOURCE, e[14], 'system'),
         }
       }),
       layout: dec(COVER_LAYOUT, g(2, 'c'), 'center'),

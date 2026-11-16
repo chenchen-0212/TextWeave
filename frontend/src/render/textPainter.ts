@@ -148,7 +148,14 @@ export function drawCoverText(
     }
 
     const lineHeight = box.fontSize * 1.25
-    applyFont(ctx, t.fontFamily, box.fontSize, box.fontWeight, box.color || fallbackColor, t.letterSpacing)
+    applyFont(
+      ctx,
+      box.fontFamily || t.fontFamily,
+      box.fontSize,
+      box.fontWeight,
+      box.color || fallbackColor,
+      t.letterSpacing,
+    )
 
     // 盒内水平对齐：left/right 用实际行宽，center 用盒宽中线
     ctx.textAlign = box.align === 'left' ? 'left' : box.align === 'right' ? 'right' : 'center'
@@ -167,7 +174,7 @@ export function drawCoverText(
 
 /**
  * 绘制单个文本的局部蒙版面板。
- * 面板区域已由 core 计算好（文字块 + mask.pad 外扩），这里只按形态填充。
+ * 面板区域已由 core 计算好（文字块按 padX/padY 分别外扩），这里只按形态填充。
  */
 function drawTextLayerMask(ctx: CanvasRenderingContext2D, box: CoverTextBox, cfg: StyleConfig): void {
   const m = box.mask

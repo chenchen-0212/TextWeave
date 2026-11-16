@@ -7,9 +7,21 @@
  */
 
 import { computed, ref } from 'vue'
-import type { FontEntry } from '../types'
+import type { FontEntry, FontSource } from '../types'
 import { useAppStore } from '../stores/config'
 import { formatBytes } from '../utils/bytes'
+
+/**
+ * 默认作用于正文文字；传入 family/source/path 时改为「选择即 emit」，
+ * 供封面等需要独立字体的位置复用同一套字体源。
+ */
+const props = defineProps<{
+  family?: string
+  source?: FontSource
+  path?: string
+}>()
+
+const emit = defineEmits<{ (e: 'select', f: FontEntry): void }>()
 
 const store = useAppStore()
 const cfg = store.cfg
@@ -31,13 +43,30 @@ const totalLabel = computed(() => {
   return `共 ${total} 个支持中文的字体`
 })
 
+/** 是否「跟随正文」模式（未传入目标字体时作用于正文配置） */
+const followsBody = computed(() => props.family === undefined)
+
 function isActive(f: FontEntry): boolean {
-  if (cfg.text.fontSource === 'user' && f.source === 'user') return cfg.text.fontPath === f.path
-  return cfg.text.fontSource === 'system' && f.source === 'system' && cfg.text.fontFamily === f.family
+  if (followsBody.value) {
+    if (cfg.text.fontSource === 'user' && f.source === 'user') return cfg.text.fontPath === f.path
+    return cfg.text.fontSource === 'system' && f.source === 'system' && cfg.text.fontFamily === f.family
+  }
+  if (props.source === 'user') return f.source === 'user' && props.path === f.path
+  return f.source === 'system' && props.family === f.family
 }
 
 function pick(f: FontEntry): void {
-  store.selectFont(f.family, f.source, f.path)
+  if (followsBody.value) {
+    store.selectFont(f.family, f.source, f.path)
+    return
+  }
+  emit('select', f)
+}
+
+/** 上传：作用于正文的按原逻辑顺带设为正文字体；否则只把新字体交给调用方 */
+async function upload(): Promise<void> {
+  const entry = await store.chooseAndImportFont(followsBody.value)
+  if (entry && !followsBody.value) emit('select', entry)
 }
 
 async function removeFont(f: FontEntry, ev: Event): Promise<void> {
@@ -55,7 +84,7 @@ async function removeFont(f: FontEntry, ev: Event): Promise<void> {
         placeholder="搜索字体…"
         class="grow"
       />
-      <button class="btn sm" type="button" @click="store.chooseAndImportFont()">上传</button>
+      <button class="btn sm" type="button" @click="upload">上传</button>
     </div>
 
     <div class="font-list">

@@ -110,8 +110,11 @@ function normalize(cfg) {
   for (const item of c.cover.items) {
     // 封面 id 是本地标识，导入时重新生成
     item.id = ''
-    // 文本元素 id 同样是本地标识
-    for (const t of item.texts ?? []) t.id = ''
+    // 文本元素 id 同样是本地标识；字体文件路径不参与传输
+    for (const t of item.texts ?? []) {
+      t.id = ''
+      t.fontPath = ''
+    }
     // 封面背景图的路径与本机文件名都不参与传输
     item.background.path = ''
     item.background.name = ''
@@ -194,6 +197,25 @@ function testMaskRoundTrip() {
       },
     },
     {
+      // v7：自定义矩形（只动蒙版位置，不参与排版）
+      type: '自定义卡片',
+      mutate: (c) => {
+        c.mask = {
+          type: 'card',
+          color: '#000000',
+          alpha: 0.5,
+          radius: 8,
+          pad: 48,
+          blur: 0,
+          position: 'custom',
+          cx: 0.06,
+          cy: 0.2,
+          cw: 0.88,
+          ch: 0.5,
+        }
+      },
+    },
+    {
       type: 'veil',
       mutate: (c) => {
         c.mask = { type: 'veil', color: '#000000', alpha: 0.48, topBoost: 0.3, bottomBoost: 0.7 }
@@ -255,6 +277,9 @@ function textEl(text, over = {}) {
     id: `t-${Math.random().toString(36).slice(2, 8)}`,
     enabled: true,
     text,
+    fontFamily: '',
+    fontSource: 'system',
+    fontPath: '',
     fontSize: 96,
     fontWeight: 700,
     color: '',
@@ -263,7 +288,7 @@ function textEl(text, over = {}) {
     y: 0.5,
     widthRatio: 0.86,
     placed: false,
-    mask: { type: 'card', color: '#000000', alpha: 0.45, radius: 18, pad: 28, blur: 0, position: 'center' },
+    mask: { type: 'card', color: '#000000', alpha: 0.45, radius: 18, padX: 28, padY: 28 },
     maskEnabled: false,
     z: 0,
     ...over,
@@ -279,6 +304,9 @@ function makeCover(overrides) {
         id: `t-${Math.random().toString(36).slice(2, 8)}`,
         enabled: true,
         text: '标题',
+        fontFamily: '',
+        fontSource: 'system',
+        fontPath: '',
         fontSize: 96,
         fontWeight: 700,
         color: '',
@@ -1015,7 +1043,7 @@ function testCoverTextElements() {
       textEl('带蒙版', {
         maskEnabled: true,
         z: 3,
-        mask: { type: 'card', color: '#112233', alpha: 0.62, radius: 26, pad: 40, blur: 4, position: 'center' },
+        mask: { type: 'card', color: '#112233', alpha: 0.62, radius: 26, padX: 40, padY: 12 },
       }),
       textEl('无蒙版', { z: 1 }),
     ]
@@ -1024,7 +1052,8 @@ function testCoverTextElements() {
   check('文本蒙版开关往返', mDecoded[0].maskEnabled === true && mDecoded[1].maskEnabled === false,
     `${mDecoded[0].maskEnabled}/${mDecoded[1].maskEnabled}`)
   check('文本蒙版颜色往返', mDecoded[0].mask.color === '#112233', mDecoded[0].mask.color)
-  check('文本蒙版 pad 往返', mDecoded[0].mask.pad === 40, String(mDecoded[0].mask.pad))
+  check('文本蒙版 padX 往返', mDecoded[0].mask.padX === 40, String(mDecoded[0].mask.padX))
+  check('文本蒙版 padY 往返（与 padX 不同）', mDecoded[0].mask.padY === 12, String(mDecoded[0].mask.padY))
   check('文本蒙版圆角往返', mDecoded[0].mask.radius === 26, String(mDecoded[0].mask.radius))
   check('文本层级 z 往返', mDecoded[0].z === 3 && mDecoded[1].z === 1, `${mDecoded[0].z}/${mDecoded[1].z}`)
 
@@ -1057,14 +1086,55 @@ function testCoverTextElements() {
 
   // 蒙版非法值被净化
   const badMask = sanitizeConfig({
-    cover: { items: [{ texts: [{ text: 'x', mask: { type: 'card', color: 'zzz', alpha: 9, radius: -5, pad: 1e9, blur: 999 }, maskEnabled: true, z: 999 }] }] },
+    cover: { items: [{ texts: [{ text: 'x', mask: { type: 'card', color: 'zzz', alpha: 9, radius: -5, padX: 1e9, padY: -20 }, maskEnabled: true, z: 999 }] }] },
   })
   const bm = badMask.cover.items[0].texts[0]
   check('非法蒙版颜色回退', bm.mask.color === '#000000', bm.mask.color)
   check('蒙版浓度被夹到 1', bm.mask.alpha === 1, String(bm.mask.alpha))
   check('蒙版圆角夹到 0', bm.mask.radius === 0, String(bm.mask.radius))
-  check('蒙版内边距被夹上限', bm.mask.pad <= 400, String(bm.mask.pad))
+  check('padX 被夹上限', bm.mask.padX <= 400, String(bm.mask.padX))
+  check('padY 被夹下限', bm.mask.padY === 0, String(bm.mask.padY))
   check('z 被夹到上限', bm.z <= types.MAX_COVER_TEXTS, String(bm.z))
+
+  // ---- 旧单一 pad 迁移到 padX/padY（v5 → v6 兼容）----
+  const legacyPadCfg = sanitizeConfig({
+    cover: { items: [{ texts: [{ text: '旧蒙版', maskEnabled: true, mask: { type: 'card', color: '#000000', alpha: 0.5, radius: 20, pad: 36 } }] }] },
+  })
+  const lp = legacyPadCfg.cover.items[0].texts[0].mask
+  check('旧 pad 同时迁移到 padX', lp.padX === 36, String(lp.padX))
+  check('旧 pad 同时迁移到 padY', lp.padY === 36, String(lp.padY))
+
+  // 只有 padY 时，padX 跟随 padY（避免出现 0 宽度的诡异面板）
+  const onlyY = sanitizeConfig({ cover: { items: [{ texts: [{ text: 'x', mask: { type: 'card', padY: 50 } }] }] } })
+  const oy = onlyY.cover.items[0].texts[0].mask
+  check('仅有 padY 时 padX 跟随', oy.padX === 50 && oy.padY === 50, `${oy.padX}/${oy.padY}`)
+
+  // 旧 v5 分享码（蒙版为 7 项 encodeMask 数组）解码后应迁移成两项且相等。
+  // 注意分享码的嵌套结构：arr[35] 是封面数组，arr[35][i][1] 才是该封面的 texts。
+  const v5Raw = JSON.parse(Buffer.from(encodeShareCode(cfg, 'x').slice(4).replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'))
+  const v5TextElem = [1, '旧码蒙版', 96, 700, '', 'c', 0.5, 0.5, 0.86, 1]
+  v5TextElem.push(1)                                      // maskEnabled
+  v5TextElem.push(['c', '#000000', 0.5, 18, 36, 0, 's']) // v5 的 7 项 encodeMask，单一 pad=36
+  v5TextElem.push(0)                                      // z
+  const v5Cover = v5Raw[2][35][0].slice()
+  v5Cover[1] = [v5TextElem]
+  const v5Arr = [5, v5Raw[1], v5Raw[2].slice()]
+  v5Arr[2][35] = [v5Cover]
+  const v5Code = 'TW1-' + Buffer.from(JSON.stringify([v5Arr[0], v5Arr[1], v5Arr[2]]))
+    .toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  let v5Mask = null
+  let v5Err = ''
+  try {
+    v5Mask = decodeSharePayload(v5Code).config.cover.items[0].texts[0].mask
+  } catch (e) {
+    v5Err = e.message
+  }
+  check('v5 旧码蒙版可解码', v5Mask !== null, v5Err)
+  if (v5Mask) {
+    // v5 旧码的单一 pad（index 4 = 36）应迁移成相等的 padX / padY
+    check('v5 旧码 pad 迁移为 padX=padY', v5Mask.padX === 36 && v5Mask.padY === 36, `${v5Mask.padX}/${v5Mask.padY}`)
+    check('v5 旧码其他参数同步迁移', v5Mask.radius === 18 && v5Mask.alpha === 0.5, JSON.stringify(v5Mask))
+  }
 
   // 元素 id 是本地标识，不参与传输
   const code = encodeShareCode(cfg, 'id 脱敏')

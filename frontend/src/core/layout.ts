@@ -16,7 +16,7 @@ import { breakIntoLines, breakRaw } from './lineBreaker'
 import { measurePageHeight, paginate } from './paginator'
 import { splitByLength, splitClauses, splitParagraphs, splitSentences } from './splitter'
 import { solvePageConstraint } from './constraint'
-import { defaultCoverTextMask } from '../types'
+import { COVER_TEXT_PAD_MAX, COVER_TEXT_PAD_MIN, defaultCoverTextMask } from '../types'
 import { pageCanvasSize } from './pageCanvas'
 
 /**
@@ -259,7 +259,9 @@ export function layoutCoverTextBoxes(
     if (!text || !el.enabled) continue
 
     const maxWidth = Math.max(el.fontSize * 2, W * clamp(el.widthRatio, 0.2, 1))
-    metrics.setFont(cfg.text.fontFamily, el.fontSize, el.fontWeight, cfg.text.letterSpacing)
+    // 元素自身未指定字体时跟随正文，保证旧数据与升级前逐像素一致
+    const family = el.fontFamily || cfg.text.fontFamily
+    metrics.setFont(family, el.fontSize, el.fontWeight, cfg.text.letterSpacing)
     const lines = breakRaw(text, metrics, maxWidth).filter((l) => l.text.length > 0)
     if (lines.length === 0) continue
 
@@ -278,19 +280,29 @@ export function layoutCoverTextBoxes(
     bx = clamp(bx, 0, Math.max(0, W - w))
     by = clamp(by, 0, Math.max(0, H - h))
 
-    // 文本自带蒙版：面板 = 文字块按自身 mask.pad 外扩（card 形态）
-    // veil / gradient 形态覆盖整块；未启用时面板退化为文字块本身
+    // 文本自带蒙版：面板 = 文字块按自身 padX（左右）/ padY（上下）分别外扩。
+    // veil / gradient 形态覆盖整块；未启用时面板退化为文字块本身。
     const textMask = el.mask ?? defaultCoverTextMask()
-    const pad = el.maskEnabled && textMask.type === 'card' ? Math.max(0, textMask.pad) : 0
+    const usePad = el.maskEnabled && textMask.type === 'card'
+    const padX = usePad ? clamp(textMask.padX, COVER_TEXT_PAD_MIN, COVER_TEXT_PAD_MAX) : 0
+    const padY = usePad ? clamp(textMask.padY, COVER_TEXT_PAD_MIN, COVER_TEXT_PAD_MAX) : 0
+
+    // 外扩后的尺寸先封顶到封面自身宽高：内边距再大，蒙版也不得超出封面。
+    // 注意文字块自身可能已高于/宽于画布（极端字号 + 长文本），此时单纯取
+    // min(文字块 + 2*pad, 封面) 会得到比文字还小的面板，把文字露在蒙版外。
+    // 故再兜一层底：面板至少盖住文字块落在画布内的可见部分 min(w, W) / min(h, H)；
+    // 这个下界本身不超过封面尺寸，因此不会反过来突破封顶。
+    const panelW = Math.max(Math.min(w + padX * 2, W), Math.min(w, W))
+    const panelH = Math.max(Math.min(h + padY * 2, H), Math.min(h, H))
+
+    // 面板位置以「外扩后的左上角」为起点再钳制进画布；
+    // 面板被封顶时起点会是负值，钳制后自然贴到画布边缘。
     const panel = {
-      x: bx - pad,
-      y: by - pad,
-      w: w + pad * 2,
-      h: h + pad * 2,
+      x: clamp(bx - padX, 0, Math.max(0, W - panelW)),
+      y: clamp(by - padY, 0, Math.max(0, H - panelH)),
+      w: panelW,
+      h: panelH,
     }
-    // 面板同样钳制在画布内，避免蒙版溢出
-    panel.x = clamp(panel.x, 0, Math.max(0, W - panel.w))
-    panel.y = clamp(panel.y, 0, Math.max(0, H - panel.h))
 
     boxes.push({
       elementId: el.id,
@@ -299,6 +311,7 @@ export function layoutCoverTextBoxes(
       y: by,
       w,
       h,
+      fontFamily: family,
       fontSize: el.fontSize,
       fontWeight: el.fontWeight,
       color: el.color,
@@ -307,6 +320,8 @@ export function layoutCoverTextBoxes(
       maskEnabled: el.maskEnabled,
       z: Number.isFinite(el.z) ? el.z : 0,
       panel,
+      padXUsed: padX,
+      padYUsed: padY,
       overlapped: false,
     })
   }

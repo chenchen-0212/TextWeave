@@ -80,6 +80,18 @@ export function getCardRegion(cfg: StyleConfig, mask: CardMask, geo: Geometry, c
     return { x: pad, y: pad, w: maxW, h: maxH }
   }
 
+  // 自定义矩形：纯视觉调整，几何计算（computeGeometry / getTextOrigin）完全不读它，
+  // 因此改这里不会触发重新分页。
+  if (mask.position === 'custom') {
+    const W = cfg.canvas.width
+    const H = cfg.canvas.height
+    const cx = Math.min(0.99, Math.max(0, mask.cx ?? 0.1))
+    const cy = Math.min(0.99, Math.max(0, mask.cy ?? 0.1))
+    const cw = Math.min(1 - cx, Math.max(0.01, mask.cw ?? 0.8))
+    const ch = Math.min(1 - cy, Math.max(0.01, mask.ch ?? 0.8))
+    return { x: cx * W, y: cy * H, w: cw * W, h: ch * H }
+  }
+
   const minH = geo.lineHeight + mask.pad * 2
   const h = Math.min(maxH, Math.max(minH, contentHeight + mask.pad * 2))
 

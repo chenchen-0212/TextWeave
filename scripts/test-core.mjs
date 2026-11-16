@@ -35,6 +35,7 @@ function compile() {
     'src/core/pageCanvas.ts',
     'src/core/lineBreaker.ts',
     'src/core/prohibition.ts',
+    'src/render/masks.ts',
     'src/types/index.ts',
     '--outDir', OUT_DIR,
     '--rootDir', 'src',
@@ -93,6 +94,7 @@ function load() {
     prohibition: requireFromOut('./core/prohibition.js'),
     types: requireFromOut('./types/index.js'),
     pageCanvas: requireFromOut('./core/pageCanvas.js'),
+    masks: requireFromOut('./render/masks.js'),
   }
 }
 
@@ -180,7 +182,7 @@ function check(name, condition, detail) {
   }
 }
 
-const { layout, lineBreaker, prohibition, types, pageCanvas } = (compile(), load())
+const { layout, lineBreaker, prohibition, types, pageCanvas, masks } = (compile(), load())
 const { buildLayout, computeGeometry, layoutCoverTextBoxes, MIN_FONT_SIZE } = layout
 const { defaultConfig, defaultCoverText, CANVAS_MIN_PX, CANVAS_MAX_PX } = types
 const { pageCanvasSize, resolveCoverCanvas, unitFactor, DPI } = pageCanvas
@@ -417,11 +419,11 @@ function testCoverTexts() {
     { ...defaultCoverText({ id: 'b', text: '乙', placed: true, x: 0.5, y: 0.7, widthRatio: 0.5 }) },
   ]
   cover.texts[0].maskEnabled = true
-  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, pad: 30, blur: 0, position: 'center' }
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 30, padY: 30 }
   const withMask = layoutCoverTextBoxes(cfg, cover, makeMetrics())
   const a = withMask.find((b) => b.elementId === 'a')
   const pad = 30
-  check('面板按 mask.pad 外扩', Math.abs(a.panel.w - a.w - pad * 2) < 0.5 && Math.abs(a.panel.h - a.h - pad * 2) < 0.5,
+  check('面板按 padX/padY 外扩', Math.abs(a.panel.w - a.w - pad * 2) < 0.5 && Math.abs(a.panel.h - a.h - pad * 2) < 0.5,
     `panel ${a.panel.w.toFixed(1)}x${a.panel.h.toFixed(1)} vs text ${a.w.toFixed(1)}x${a.h.toFixed(1)}`)
   check('面板相对文字块居中', Math.abs((a.panel.x + a.panel.w / 2) - (a.x + a.w / 2)) < 0.5)
   check('启用标记透传', a.maskEnabled === true)
@@ -435,9 +437,120 @@ function testCoverTexts() {
     clampedPanel.panel.y + clampedPanel.panel.h <= cfg.canvas.height + 0.5,
     `${clampedPanel.panel.x.toFixed(1)},${clampedPanel.panel.y.toFixed(1)}`)
 
-  // veil/gradient 形态不做 pad 外扩
+  // ---- 水平/垂直内边距独立生效（v0.5.0）----
+  cover.texts[0].maskEnabled = true
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 10, padY: 60 }
+  const split = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('水平内边距只影响宽度', Math.abs(split.panel.w - split.w - 20) < 0.5, (split.panel.w - split.w).toFixed(1))
+  check('垂直内边距只影响高度', Math.abs(split.panel.h - split.h - 120) < 0.5, (split.panel.h - split.h).toFixed(1))
+  check('padX=padY 时与旧版单一内边距等价',
+    Math.abs(split.panel.w - split.w - 20) < 0.5 && Math.abs(split.panel.h - split.h - 120) < 0.5)
+
+  // 文字块本身不受内边距影响（只放大面板）
+  const beforeTextBox = { w: split.w, h: split.h }
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 0, padY: 0 }
+  const zeroPad = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('内边距为 0 时面板等于文字块', Math.abs(zeroPad.panel.w - zeroPad.w) < 0.5 && Math.abs(zeroPad.panel.h - zeroPad.h) < 0.5)
+  check('内边距不改变文字块尺寸', Math.abs(zeroPad.w - beforeTextBox.w) < 0.5 && Math.abs(zeroPad.h - beforeTextBox.h) < 0.5,
+    `${zeroPad.w.toFixed(1)}x${zeroPad.h.toFixed(1)} vs ${beforeTextBox.w.toFixed(1)}x${beforeTextBox.h.toFixed(1)}`)
+
+  // 越界的内边距被夹到上限（净化层已夹一次，这里是排版层的二次防御）
   cover.texts[0].y = 0.3
-  cover.texts[0].mask = { type: 'veil', color: '#000000', alpha: 0.4, topBoost: 0, bottomBoost: 0 }
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 99999, padY: -50 }
+  const clampedPad = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('超限 padX 被夹到 400（排版层二次防御）', Math.abs(clampedPad.padXUsed - 400) < 0.5, String(clampedPad.padXUsed))
+  check('负值 padY 被夹到 0', Math.abs(clampedPad.padYUsed - 0) < 0.5, String(clampedPad.padYUsed))
+
+  // ---- 蒙版尺寸不得超过封面宽高（v0.5.0 修复项）----
+  // 内边距为零：面板等于文字块，且仍不超封面
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 0, padY: 0 }
+  const p0 = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('零内边距：面板宽高等于文字块', Math.abs(p0.panel.w - p0.w) < 0.5 && Math.abs(p0.panel.h - p0.h) < 0.5)
+  check('零内边距：面板不超封面',
+    p0.panel.w <= cfg.canvas.width + 0.5 && p0.panel.h <= cfg.canvas.height + 0.5,
+    `${p0.panel.w.toFixed(1)}x${p0.panel.h.toFixed(1)}`)
+
+  // 正常内边距：按 padX/padY 外扩且不触顶
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 40, padY: 24 }
+  const pNormal = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('正常内边距：面板仍按 pad 外扩',
+    Math.abs(pNormal.panel.w - pNormal.w - 80) < 0.5 && Math.abs(pNormal.panel.h - pNormal.h - 48) < 0.5,
+    `${(pNormal.panel.w - pNormal.w).toFixed(1)} / ${(pNormal.panel.h - pNormal.h).toFixed(1)}`)
+  check('正常内边距：面板不超封面',
+    pNormal.panel.w <= cfg.canvas.width + 0.5 && pNormal.panel.h <= cfg.canvas.height + 0.5)
+
+  // 超大内边距：面板宽度封顶为封面宽、高度封顶为封面高（核心修复）
+  // 用「换行宽度=1 + 多行文本」把文字块撑到接近满幅，确保外扩必然溢出。
+  // 行高 = 96 × 1.25 = 120；13 行 ≈ 1560，+ 800 = 2360 > 1920 → 高度触发封顶。
+  cover.texts[0].text = '一二三四五六七八九十'.repeat(13)
+  cover.texts[0].widthRatio = 1
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 400, padY: 400 }
+  const pHuge = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('超大内边距：文字块高度小于封面高（前置条件）',
+    pHuge.h < cfg.canvas.height, pHuge.h.toFixed(1))
+  check('超大内边距：面板宽度封顶为封面宽',
+    pHuge.panel.w === cfg.canvas.width, `${pHuge.panel.w} vs ${cfg.canvas.width}`)
+  check('超大内边距：面板高度封顶为封面高',
+    pHuge.panel.h === cfg.canvas.height, `${pHuge.panel.h} vs ${cfg.canvas.height}`)
+  check('超大内边距：面板完整落在封面内',
+    pHuge.panel.x >= 0 && pHuge.panel.y >= 0 &&
+    pHuge.panel.x + pHuge.panel.w <= cfg.canvas.width + 0.5 &&
+    pHuge.panel.y + pHuge.panel.h <= cfg.canvas.height + 0.5,
+    `${pHuge.panel.x.toFixed(1)},${pHuge.panel.y.toFixed(1)}`)
+
+  // 封顶不能把面板压得比文字还小（否则蒙版盖不住自己的文字）
+  check('封顶后面板不小于文字块',
+    pHuge.panel.w >= pHuge.w - 0.5 && pHuge.panel.h >= pHuge.h - 0.5,
+    `panel ${pHuge.panel.w.toFixed(1)}x${pHuge.panel.h.toFixed(1)} vs text ${pHuge.w.toFixed(1)}x${pHuge.h.toFixed(1)}`)
+  check('封顶后面板完整包含文字块',
+    pHuge.panel.x <= pHuge.x + 0.5 && pHuge.panel.y <= pHuge.y + 0.5 &&
+    pHuge.panel.x + pHuge.panel.w >= pHuge.x + pHuge.w - 0.5 &&
+    pHuge.panel.y + pHuge.panel.h >= pHuge.y + pHuge.h - 0.5,
+    `panel ${pHuge.panel.x.toFixed(1)},${pHuge.panel.y.toFixed(1)} vs text ${pHuge.x.toFixed(1)},${pHuge.y.toFixed(1)}`)
+
+  // 单轴超大：只封顶该轴，另一轴保持正常外扩（用矮文字块确保不触顶）
+  cover.texts[0].text = '甲'
+  cover.texts[0].widthRatio = 0.5
+  cover.texts[0].y = 0.3
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 400, padY: 20 }
+  const pXOnly = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('仅水平超大：宽度被封顶且不超封面',
+    pXOnly.panel.w <= cfg.canvas.width + 0.5, String(pXOnly.panel.w))
+  check('仅水平超大：高度按 padY 正常外扩',
+    Math.abs(pXOnly.panel.h - pXOnly.h - 40) < 0.5, (pXOnly.panel.h - pXOnly.h).toFixed(1))
+
+  // 文字块贴左上角时，封顶后面板仍完整盖住文字
+  cover.texts[0].text = '甲'
+  cover.texts[0].widthRatio = 0.5
+  cover.texts[0].x = 0
+  cover.texts[0].y = 0
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 400, padY: 400 }
+  const pEdge = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('贴边+超大内边距：面板完整包含文字块',
+    pEdge.panel.x <= pEdge.x + 0.5 && pEdge.panel.y <= pEdge.y + 0.5 &&
+    pEdge.panel.x + pEdge.panel.w >= pEdge.x + pEdge.w - 0.5 &&
+    pEdge.panel.y + pEdge.panel.h >= pEdge.y + pEdge.h - 0.5,
+    `panel ${pEdge.panel.x.toFixed(1)},${pEdge.panel.y.toFixed(1)},${pEdge.panel.w.toFixed(1)},${pEdge.panel.h.toFixed(1)}`)
+  check('贴边+超大内边距：面板不超封面',
+    pEdge.panel.w <= cfg.canvas.width + 0.5 && pEdge.panel.h <= cfg.canvas.height + 0.5)
+
+  // 文字块宽满整幅时（换行宽度=1 + 长文本），面板宽度封顶为封面宽
+  cover.texts[0].text = '一二三四五六七八九十'.repeat(20)
+  cover.texts[0].widthRatio = 1
+  cover.texts[0].x = 0.5
+  cover.texts[0].y = 0.5
+  cover.texts[0].mask = { type: 'card', color: '#000000', alpha: 0.4, radius: 18, padX: 400, padY: 400 }
+  const pFull = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
+  check('满幅文字+超大内边距：面板宽度封顶为封面宽',
+    pFull.panel.w === cfg.canvas.width, `${pFull.panel.w} vs ${cfg.canvas.width}`)
+  check('满幅文字+超大内边距：面板高度封顶为封面高',
+    pFull.panel.h === cfg.canvas.height, `${pFull.panel.h} vs ${cfg.canvas.height}`)
+
+  // veil/gradient 形态不做 pad 外扩
+  cover.texts[0].text = '甲'
+  cover.texts[0].widthRatio = 0.5
+  cover.texts[0].y = 0.3
+  cover.texts[0].mask = { type: 'veil', color: '#000000', alpha: 0.4 }
   const veilBox = layoutCoverTextBoxes(cfg, cover, makeMetrics()).find((b) => b.elementId === 'a')
   check('veil 形态面板等于文字块', veilBox.panel.w === veilBox.w && veilBox.panel.h === veilBox.h)
 
@@ -542,6 +655,53 @@ function testCoverCanvas() {
   check('英寸大值被夹到上限', big.width === CANVAS_MAX_PX, String(big.width))
 }
 
+// ---------------------------------------------------------------- H 自定义蒙版
+
+function testCustomMask() {
+  console.log('\nH. 自定义蒙版矩形')
+
+  const cfg = defaultConfig()
+  const custom = {
+    type: 'card',
+    color: '#000000',
+    alpha: 0.5,
+    radius: 8,
+    pad: 48,
+    blur: 0,
+    position: 'custom',
+    cx: 0.1,
+    cy: 0.2,
+    cw: 0.5,
+    ch: 0.4,
+  }
+  const withCustom = { ...cfg, mask: custom }
+  const { width: W, height: H } = cfg.canvas
+  const rect = masks.getCardRegion(withCustom, custom, layout.computeGeometry(withCustom, 48), 100)
+
+  check(
+    '矩形按比例定位',
+    Math.abs(rect.x - W * 0.1) < 0.5 &&
+      Math.abs(rect.y - H * 0.2) < 0.5 &&
+      Math.abs(rect.w - W * 0.5) < 0.5 &&
+      Math.abs(rect.h - H * 0.4) < 0.5,
+    JSON.stringify(rect),
+  )
+
+  // 关键性质：自定义矩形只影响蒙版绘制，排版几何必须与默认蒙版逐值相同
+  const a = layout.computeGeometry(cfg, 48)
+  const b = layout.computeGeometry(withCustom, 48)
+  check(
+    '可用区不受自定义矩形影响',
+    a.availW === b.availW && a.availH === b.availH && a.maskPad === b.maskPad,
+    `${a.availW}x${a.availH} vs ${b.availW}x${b.availH}`,
+  )
+
+  // 越界保护：x/w 之和超过 1 时按画布边缘截断
+  const over = { ...custom, cx: 0.9, cw: 0.8 }
+  const r2 = masks.getCardRegion({ ...cfg, mask: over }, over, b, 100)
+  check('越界矩形被截断在画布内', r2.x + r2.w <= W + 0.01, `${r2.x}+${r2.w} / ${W}`)
+}
+
 // ---------------------------------------------------------------- 主流程
 
 console.log('='.repeat(64))
@@ -557,6 +717,7 @@ testPathological()
 testOrphans()
 testCoverTexts()
 testCoverCanvas()
+testCustomMask()
 
 console.log('\n' + '='.repeat(64))
 console.log(`通过 ${passed} 项，失败 ${failed} 项`)

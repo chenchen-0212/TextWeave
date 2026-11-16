@@ -8,22 +8,18 @@
  */
 
 import { computed, ref, watch } from 'vue'
-import type { CoverItem, MaskType } from '../../types'
-import { BLEND_MODES, defaultCoverTextMask, defaultMaskOfType } from '../../types'
+import type { CoverItem, CoverTextElement, FontEntry, MaskType } from '../../types'
+import { BLEND_MODES, defaultCoverTextMaskOfType } from '../../types'
 import { useAppStore } from '../../stores/config'
+import FontPicker from '../FontPicker.vue'
 import MaskControls from './MaskControls.vue'
+import TextMaskControls from './TextMaskControls.vue'
 import ParamField from '../ui/ParamField.vue'
 
 const props = defineProps<{ cover: CoverItem }>()
 
 const store = useAppStore()
 const cfg = store.cfg
-
-/** 文本级蒙版切换形态：基于文本默认参数重建，避免残留上一个形态的字段 */
-function defaultCoverTextMaskOf(type: MaskType) {
-  const base = defaultCoverTextMask()
-  return type === 'card' ? base : defaultMaskOfType(type)
-}
 
 const WEIGHTS = [
   { value: 400, label: '常规 400' },
@@ -57,6 +53,24 @@ function setCover(key: string, value: unknown): void {
 
 function setBg(key: string, value: unknown): void {
   ;(props.cover.background as unknown as Record<string, unknown>)[key] = value
+}
+
+// ---------------------------------------------------------------- 封面字体
+
+/** 当前展开字体列表的文本元素 id（一次只展开一个，避免面板过长） */
+const openFontId = ref('')
+
+function applyFont(el: CoverTextElement, f: FontEntry): void {
+  el.fontFamily = f.family
+  el.fontSource = f.source
+  el.fontPath = f.source === 'user' ? f.path : ''
+}
+
+/** 清空为「跟随正文」 */
+function followBodyFont(el: CoverTextElement): void {
+  el.fontFamily = ''
+  el.fontSource = 'system'
+  el.fontPath = ''
 }
 
 // ---------------------------------------------------------------- 背景预览
@@ -191,6 +205,38 @@ const hasImage = computed(() => {
         空文本不会输出，但仍可保留位置。
       </div>
 
+      <div class="field">
+        <div class="field-label">字体</div>
+        <div class="field-control">
+          <button
+            class="btn sm grow"
+            type="button"
+            style="justify-content: space-between; overflow: hidden"
+            @click="openFontId = openFontId === el.id ? '' : el.id"
+          >
+            <span style="overflow: hidden; text-overflow: ellipsis">{{ el.fontFamily || '跟随正文' }}</span>
+            <span class="muted">{{ openFontId === el.id ? '收起' : '更换' }}</span>
+          </button>
+        </div>
+      </div>
+      <div v-if="openFontId === el.id" class="mb8">
+        <FontPicker
+          :family="el.fontFamily"
+          :source="el.fontSource"
+          :path="el.fontPath"
+          @select="(f) => applyFont(el, f)"
+        />
+        <button
+          v-if="el.fontFamily"
+          class="btn sm ghost"
+          type="button"
+          style="margin-top: 6px"
+          @click="followBodyFont(el)"
+        >
+          恢复跟随正文
+        </button>
+      </div>
+
       <ParamField
         label="字号"
         :modelValue="el.fontSize"
@@ -244,14 +290,15 @@ const hasImage = computed(() => {
         @update:modelValue="(v) => store.toggleCoverTextMask(cover.id, el.id)"
       />
       <template v-if="el.maskEnabled">
-        <MaskControls
+        <TextMaskControls
           :mask="el.mask"
-          :show-type-switch="true"
-          @type-change="(t) => (el.mask = defaultCoverTextMaskOf(t))"
+          @type-change="(t) => (el.mask = defaultCoverTextMaskOfType(t))"
         />
         <div class="field-hint">
-          蒙版面板贴合这块文字（外扩 {{ el.mask.type === 'card' ? el.mask.pad : 0 }}px），
-          显示范围由它自己决定，与封面底蒙版无关。
+          蒙版面板贴合这块文字，显示范围由它自己决定，与封面底蒙版无关。
+          <template v-if="el.mask.type === 'card'">
+            当前外扩：左右 {{ el.mask.padX }}px / 上下 {{ el.mask.padY }}px。
+          </template>
         </div>
       </template>
 

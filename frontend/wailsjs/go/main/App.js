@@ -54,6 +54,10 @@ export function PyStatus() {
   return window['go']['main']['App']['PyStatus']();
 }
 
+export function ReadCache(arg1) {
+  return window['go']['main']['App']['ReadCache'](arg1);
+}
+
 export function ReadFileBase64(arg1) {
   return window['go']['main']['App']['ReadFileBase64'](arg1);
 }
@@ -80,4 +84,8 @@ export function SaveImage(arg1, arg2, arg3) {
 
 export function SaveZip(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveZip'](arg1, arg2, arg3);
+}
+
+export function WriteCache(arg1, arg2) {
+  return window['go']['main']['App']['WriteCache'](arg1, arg2);
 }

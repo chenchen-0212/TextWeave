@@ -153,6 +153,17 @@ func (a *App) SaveConfig(raw string) error { return config.SaveConfig(raw) }
 // ConfigDir 返回应用数据目录，便于界面展示。
 func (a *App) ConfigDir() string { return config.MustDir() }
 
+// ReadCache 读取配置目录下的命名数据文件（历史任务等本机数据）。
+func (a *App) ReadCache(name string) (string, error) { return config.ReadCache(name) }
+
+// WriteCache 写入配置目录下的命名数据文件，拒绝非 JSON 内容。
+func (a *App) WriteCache(name string, raw string) error {
+	if !json.Valid([]byte(raw)) {
+		return fmt.Errorf("内容不是合法 JSON，已拒绝写入")
+	}
+	return config.WriteCache(name, raw)
+}
+
 // ---------------------------------------------------------------- 字体
 
 // ListFonts 枚举可用字体（仅返回覆盖汉字区的字体）。

@@ -25,6 +25,7 @@ import {
   ProbeImage,
   PyRun,
   PyStatus as PyStatusBinding,
+  ReadCache,
   ReadFileBase64,
   ReadTextFile,
   RemoveFont,
@@ -32,6 +33,7 @@ import {
   SaveConfig,
   SaveImage,
   SaveZip,
+  WriteCache,
 } from '../../wailsjs/go/main/App'
 
 import { EventsOff, EventsOn, OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
@@ -221,6 +223,16 @@ export async function loadConfig(): Promise<string> {
 
 export async function saveConfig(raw: string): Promise<void> {
   await SaveConfig(raw)
+}
+
+/** 读取配置目录下的命名数据文件；文件不存在返回空字符串，读写错误抛出。 */
+export async function readCache(name: string): Promise<string> {
+  return (await ReadCache(name)) || ''
+}
+
+/** 写入配置目录下的命名数据文件（Go 侧原子写并校验 JSON）。 */
+export async function writeCache(name: string, raw: string): Promise<void> {
+  await WriteCache(name, raw)
 }
 
 export async function getConfigDir(): Promise<string> {

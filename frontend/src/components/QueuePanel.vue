@@ -6,6 +6,13 @@ import { useQueueStore } from '../stores/queue'
 
 const queue = useQueueStore()
 const app = useAppStore()
+const emit = defineEmits<{ applied: [] }>()
+
+/** 复现后关闭弹窗，回工作区继续编辑 */
+async function apply(id: string): Promise<void> {
+  await queue.applyTask(id)
+  emit('applied')
+}
 
 const statusText: Record<string, string> = {
   pending: '排队中',
@@ -31,13 +38,6 @@ function statusColor(status?: string): string {
 
 <template>
   <div class="queue-panel">
-    <div class="row between" style="margin-bottom: 8px">
-      <strong style="font-size: 12px">任务队列</strong>
-      <span style="font-size: 11px; color: var(--text-3)">
-        {{ queue.enabledCount }} 条待执行
-      </span>
-    </div>
-
     <div class="row" style="margin-bottom: 8px; flex-wrap: wrap">
       <button class="btn sm" type="button" :disabled="queue.running" @click="queue.addTaskFromCurrent()">
         收当前为新任务
@@ -92,7 +92,7 @@ function statusColor(status?: string): string {
           type="button"
           :disabled="queue.running"
           title="把这条任务的样式与正文载入工作区，改完自动存回这条任务"
-          @click="queue.applyTask(task.id)"
+          @click="apply(task.id)"
         >
           复现
         </button>
@@ -129,11 +129,8 @@ function statusColor(status?: string): string {
 
 <style scoped>
 .queue-panel {
-  flex: 0 0 auto;
-  max-height: 42%;
-  overflow-y: auto;
-  padding: 10px 12px 16px;
-  border-top: 1px solid var(--border);
+  flex: 1;
+  min-height: 0;
 }
 
 .queue-task {

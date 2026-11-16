@@ -1,12 +1,20 @@
 <script setup lang="ts">
 /** 顶部工具栏。 */
 
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useAppStore } from '../stores/config'
+import { useQueueStore } from '../stores/queue'
 import { useTemplateStore } from '../stores/templates'
+import HistoryPanel from './HistoryPanel.vue'
+import ModalDialog from './ModalDialog.vue'
+import QueuePanel from './QueuePanel.vue'
 
 const store = useAppStore()
+const queue = useQueueStore()
 const tpl = useTemplateStore()
+
+/** 当前打开的弹窗；同一时间只开一个 */
+const openPanel = ref<'history' | 'queue' | null>(null)
 
 const exportLabel = computed(() =>
   store.totalPages > 0 ? `导出全部（${store.totalPages} 张）` : '导出全部',
@@ -38,6 +46,14 @@ function quickSaveTemplate(): void {
     <div class="toolbar-group">
       <button class="btn" type="button" @click="store.chooseBackground()">导入背景图</button>
       <button class="btn" type="button" @click="store.importTextFile()">导入文本</button>
+      <button class="btn" type="button" @click="openPanel = 'history'">
+        历史记录<span v-if="store.exportHistory.length" class="tb-badge">{{
+          store.exportHistory.length
+        }}</span>
+      </button>
+      <button class="btn" type="button" @click="openPanel = 'queue'">
+        任务队列<span v-if="queue.tasks.length" class="tb-badge">{{ queue.enabledCount }}</span>
+      </button>
     </div>
 
     <div class="toolbar-spacer"></div>
@@ -72,5 +88,36 @@ function quickSaveTemplate(): void {
         重置
       </button>
     </div>
+
+    <ModalDialog
+      v-if="openPanel === 'history'"
+      title="历史记录"
+      :subtitle="`${store.exportHistory.length} 条 · 导出成功后自动存档`"
+      @close="openPanel = null"
+    >
+      <HistoryPanel @restored="openPanel = null" />
+    </ModalDialog>
+
+    <ModalDialog
+      v-else-if="openPanel === 'queue'"
+      title="任务队列"
+      :subtitle="`${queue.enabledCount} 条待执行 · 导出成功后自动移入历史记录`"
+      @close="openPanel = null"
+    >
+      <QueuePanel @applied="openPanel = null" />
+    </ModalDialog>
   </header>
 </template>
+
+<style scoped>
+.tb-badge {
+  margin-left: 5px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 15px;
+  font-variant-numeric: tabular-nums;
+}
+</style>

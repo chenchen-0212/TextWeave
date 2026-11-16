@@ -352,6 +352,9 @@ export const useAppStore = defineStore('app', () => {
       // 配置损坏时静默回退到默认值，不阻塞启动
     }
 
+    // 历史记录：优先读文件，首次启动迁移旧版 localStorage
+    exportHistory.value = await loadHistory()
+
     // 2) 环境信息
     void api.pyStatus().then((s) => {
       py.value = s
@@ -871,7 +874,7 @@ export const useAppStore = defineStore('app', () => {
       } else {
         const zipNote = result.zipPath ? '，并已打包 ZIP' : ''
         exportSuccess.value = `已导出 ${result.files.length} 张到 ${outDir}${zipNote}`
-        recordHistory(result.files.length, outDir)
+        recordHistory(result.files.length, outDir, '', bookOverride)
       }
     } catch (e) {
       exportError.value = e instanceof Error ? e.message : '导出失败'
@@ -1215,8 +1218,12 @@ export const useAppStore = defineStore('app', () => {
 
   // ------------------------------------------------------------ 历史任务存档（N-06）
 
+  /** 旧版本存在 localStorage，仅用于首次启动迁移 */
   const HISTORY_STORAGE_KEY = 'textweave.history.v1'
-  const HISTORY_LIMIT = 20
+  /** 历史快照文件，存于应用数据目录（与 config.json 同级） */
+  const HISTORY_FILE = 'history.json'
+  /** 迁移前把旧数据原样留一份，便于人工找回 */
+  const HISTORY_LEGACY_BACKUP = 'history.localstorage.bak.json'
   const HISTORY_TEXT_LIMIT = 20000
 
   /** 一条历史快照：恢复一次导出所需的全部信息 */
@@ -1239,41 +1246,102 @@ export const useAppStore = defineStore('app', () => {
     /** 背景图路径 */
     bgPath: string
     bgName: string
-    /** 完整配置快照（含路径，本机数据） */
-    config: StyleConfig
+    /** 完整配置快照（含路径，本机数据）；旧数据可能缺失 */
+    config?: StyleConfig
   }
 
-  const exportHistory = ref<HistoryEntry[]>(loadHistory())
+  // 启动时由 init() 从文件载入
+  const exportHistory = ref<HistoryEntry[]>([])
 
-  function loadHistory(): HistoryEntry[] {
+  /** 单条校验：history.json 可能被手工修改，坏条目丢弃，避免列表渲染崩溃。 */
+  function normalizeHistoryEntry(raw: unknown): HistoryEntry | null {
+    const it = (raw ?? {}) as Partial<HistoryEntry>
+    if (typeof it.id !== 'string' || !it.id) return null
+    return {
+      id: it.id,
+      ts: typeof it.ts === 'number' && Number.isFinite(it.ts) ? it.ts : 0,
+      pages: typeof it.pages === 'number' ? it.pages : 0,
+      sizeLabel: typeof it.sizeLabel === 'string' ? it.sizeLabel : '',
+      outDir: typeof it.outDir === 'string' ? it.outDir : '',
+      book: typeof it.book === 'string' ? it.book : '',
+      channel: typeof it.channel === 'string' ? it.channel : '',
+      text: typeof it.text === 'string' ? it.text.slice(0, HISTORY_TEXT_LIMIT) : '',
+      bgPath: typeof it.bgPath === 'string' ? it.bgPath : '',
+      bgName: typeof it.bgName === 'string' ? it.bgName : '',
+      config: it.config && typeof it.config === 'object' ? it.config : undefined,
+    }
+  }
+
+  function parseHistory(raw: string): HistoryEntry[] {
+    if (!raw) return []
     try {
-      const raw = localStorage.getItem(HISTORY_STORAGE_KEY)
-      if (!raw) return []
       const list = JSON.parse(raw)
       if (!Array.isArray(list)) return []
-      return list.slice(0, HISTORY_LIMIT)
+      return list
+        .map(normalizeHistoryEntry)
+        .filter((e): e is HistoryEntry => e !== null)
     } catch {
       return []
     }
   }
 
-  function persistHistory(): void {
+  /**
+   * 载入历史：以 history.json 为准，首次启动把旧版本 localStorage 数据合并进来。
+   *
+   * 合并而不是直接丢弃，是为了兼容「装新版后又回退跑旧版」：
+   * 旧版只会写 localStorage，再次升级时这些记录还能回到文件里。
+   */
+  async function loadHistory(): Promise<HistoryEntry[]> {
+    let legacyRaw = ''
     try {
-      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(exportHistory.value))
+      legacyRaw = localStorage.getItem(HISTORY_STORAGE_KEY) || ''
     } catch {
-      // 配额不足等情况忽略，不影响导出主流程
+      // 隐私模式 / 禁用存储
     }
+    const legacy = parseHistory(legacyRaw)
+
+    // 读盘失败与「文件不存在」必须区分：读失败时不能用旧数据覆盖文件
+    let diskRaw: string | null = null
+    try {
+      diskRaw = await api.readCache(HISTORY_FILE)
+    } catch {
+      diskRaw = null
+    }
+    if (diskRaw === null) return legacy
+
+    const disk = parseHistory(diskRaw)
+    if (legacy.length === 0) return disk
+
+    const byId = new Map<string, HistoryEntry>()
+    for (const e of legacy) byId.set(e.id, e)
+    for (const e of disk) byId.set(e.id, e) // 同 id 以磁盘为准
+    const merged = [...byId.values()].sort((a, b) => b.ts - a.ts)
+
+    try {
+      await api.writeCache(HISTORY_LEGACY_BACKUP, legacyRaw)
+      await api.writeCache(HISTORY_FILE, JSON.stringify(merged))
+      localStorage.removeItem(HISTORY_STORAGE_KEY)
+    } catch {
+      // 写盘失败：旧键保留，下次启动重试
+    }
+    return merged
   }
 
-  /** 导出成功后记录一条快照（供「历史任务」一键复现）。 */
-  function recordHistory(pages: number, outDir: string, sizeLabel = ''): void {
+  function persistHistory(): void {
+    void api.writeCache(HISTORY_FILE, JSON.stringify(exportHistory.value)).catch(() => {
+      // 写入失败不影响导出主流程，下次变更会整份重写
+    })
+  }
+
+  /** 导出成功后记录一条快照（供「历史记录」一键复现）。 */
+  function recordHistory(pages: number, outDir: string, sizeLabel = '', bookOverride?: string): void {
     const entry: HistoryEntry = {
       id: `his-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
       ts: Date.now(),
       pages,
       sizeLabel,
       outDir,
-      book: cfg.export.book,
+      book: bookOverride ?? cfg.export.book,
       channel: cfg.channel.name,
       text: text.value.slice(0, HISTORY_TEXT_LIMIT),
       bgPath: bgPath.value,
@@ -1281,12 +1349,19 @@ export const useAppStore = defineStore('app', () => {
       // 快照含封面图/字体路径：本机数据，复现时免去重选
       config: sanitizeConfig(JSON.parse(JSON.stringify(cfg)), { keepLocalPaths: true }),
     }
-    // 同一分钟内的重复导出不重复记录（微调重导场景）
+    // 同一分钟内完全相同的导出不重复记录（微调重导场景）；
+    // 队列里同名任务若样式不同，配置比对不相等，仍各记一条
+    const configKey = JSON.stringify(entry.config)
     const dup = exportHistory.value.find(
-      (h) => h.text === entry.text && h.bgPath === entry.bgPath && entry.ts - h.ts < 60_000,
+      (h) =>
+        h.book === entry.book &&
+        h.text === entry.text &&
+        h.bgPath === entry.bgPath &&
+        entry.ts - h.ts < 60_000 &&
+        JSON.stringify(h.config) === configKey,
     )
     if (dup) return
-    exportHistory.value = [entry, ...exportHistory.value].slice(0, HISTORY_LIMIT)
+    exportHistory.value = [entry, ...exportHistory.value]
     persistHistory()
   }
 
@@ -1294,7 +1369,7 @@ export const useAppStore = defineStore('app', () => {
   async function restoreHistory(id: string): Promise<void> {
     const entry = exportHistory.value.find((h) => h.id === id)
     if (!entry) return
-    mergeConfig(JSON.parse(JSON.stringify(entry.config)))
+    if (entry.config) mergeConfig(JSON.parse(JSON.stringify(entry.config)))
     text.value = entry.text
     if (entry.bgPath) {
       await setBackground(entry.bgPath)

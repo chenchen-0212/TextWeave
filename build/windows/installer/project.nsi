@@ -1,4 +1,4 @@
-Unicode true
+﻿Unicode true
 
 ####
 ## Please note: Template replacements don't work in this file. They are provided with default defines like
@@ -49,6 +49,10 @@ VIAddVersionKey "ProductName"     "${INFO_PRODUCTNAME}"
 ManifestDPIAware true
 
 !include "MUI.nsh"
+!include "nsDialogs.nsh"
+!include "LogicLib.nsh"
+
+Var /GLOBAL RemoveAppData
 
 !define MUI_ICON "..\icon.ico"
 !define MUI_UNICON "..\icon.ico"
@@ -62,9 +66,11 @@ ManifestDPIAware true
 !insertmacro MUI_PAGE_INSTFILES # Installing page.
 !insertmacro MUI_PAGE_FINISH # Finished installation page.
 
+UninstPage custom un.RemoveDataPage un.RemoveDataPageLeave # 第一步：选择是否删除程序数据
+!insertmacro MUI_UNPAGE_CONFIRM # 第二步：确认卸载
 !insertmacro MUI_UNPAGE_INSTFILES # Uinstalling page
 
-!insertmacro MUI_LANGUAGE "English" # Set the Language of the installer
+!insertmacro MUI_LANGUAGE "SimpChinese" # Installer UI language: Simplified Chinese
 
 ## The following two statements can be used to sign the installer and the uninstaller. The path to the binaries are provided in %1
 #!uninstfinalize 'signtool --file "%1"'
@@ -85,6 +91,30 @@ ShowInstDetails show # This will always show the installation details.
 
 Function .onInit
    !insertmacro wails.checkArchitecture
+FunctionEnd
+
+Function un.RemoveDataPage
+    !insertmacro MUI_HEADER_TEXT "卸载选项" "是否同时删除本机保存的程序数据"
+    nsDialogs::Create 1018
+    Pop $0
+    ${If} $0 == error
+        Abort
+    ${EndIf}
+
+    ${NSD_CreateCheckbox} 0 0u -1 12u "完全卸载：同时删除程序数据（历史记录、参数配置、导入的字体）"
+    Pop $1
+    ${If} $RemoveAppData == ${BST_CHECKED}
+        ${NSD_Check} $1
+    ${EndIf}
+
+    ${NSD_CreateLabel} 0 22u -1 48u "勾选后会删除 %APPDATA%\TextWeave 目录，历史记录与配置将无法恢复。不勾选则只卸载程序，数据保留，重新安装后仍可继续使用。"
+    Pop $2
+
+    nsDialogs::Show
+FunctionEnd
+
+Function un.RemoveDataPageLeave
+    ${NSD_GetState} $1 $RemoveAppData
 FunctionEnd
 
 Section
@@ -109,6 +139,12 @@ Section "uninstall"
     !insertmacro wails.setShellContext
 
     RMDir /r "$AppData\${PRODUCT_EXECUTABLE}" # Remove the WebView2 DataPath
+
+    ${If} $RemoveAppData == ${BST_CHECKED}
+        # 卸载器以管理员运行且 shell context 为 all 时 $APPDATA 指向 ProgramData，
+        # 因此用 $PROFILE 定位当前用户的数据目录
+        RMDir /r "$PROFILE\AppData\Roaming\TextWeave"
+    ${EndIf}
 
     RMDir /r $INSTDIR
 

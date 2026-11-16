@@ -31,6 +31,8 @@ export function PyRun(arg1:string,arg2:string):Promise<pyexec.Result>;
 
 export function PyStatus():Promise<pyexec.Status>;
 
+export function ReadCache(arg1:string):Promise<string>;
+
 export function ReadFileBase64(arg1:string):Promise<string>;
 
 export function ReadTextFile(arg1:string):Promise<string>;
@@ -44,3 +46,5 @@ export function SaveConfig(arg1:string):Promise<void>;
 export function SaveImage(arg1:string,arg2:string,arg3:string):Promise<string>;
 
 export function SaveZip(arg1:string,arg2:string,arg3:Array<fsutil.ZipEntry>):Promise<string>;
+
+export function WriteCache(arg1:string,arg2:string):Promise<void>;

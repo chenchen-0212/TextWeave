@@ -14,7 +14,6 @@ import { installAgentHost } from './backend/agentHost'
 import ToolBar from './components/ToolBar.vue'
 import StatusBar from './components/StatusBar.vue'
 import InputPanel from './components/InputPanel.vue'
-import QueuePanel from './components/QueuePanel.vue'
 import PreviewPane from './components/PreviewPane.vue'
 import ThumbnailStrip from './components/ThumbnailStrip.vue'
 
@@ -27,7 +26,6 @@ import ConstraintParams from './components/params/ConstraintParams.vue'
 import CoverParams from './components/params/CoverParams.vue'
 import OverlayParams from './components/params/OverlayParams.vue'
 import ExportParams from './components/params/ExportParams.vue'
-import HistoryParams from './components/params/HistoryParams.vue'
 import TemplateParams from './components/params/TemplateParams.vue'
 
 const store = useAppStore()
@@ -96,10 +94,9 @@ onBeforeUnmount(() => {
     <ToolBar />
 
     <div class="app-body">
-      <!-- 左：输入 + 批处理任务队列（InputPanel 自带滚动，队列固定在底部） -->
+      <!-- 左：输入（任务队列在工具栏弹窗中） -->
       <div class="pane">
         <InputPanel />
-        <QueuePanel />
       </div>
 
       <!-- 中：预览 + 缩略图条 -->
@@ -120,7 +117,6 @@ onBeforeUnmount(() => {
           <CoverParams />
           <OverlayParams />
           <ExportParams />
-          <HistoryParams />
           <TemplateParams />
         </div>
       </div>

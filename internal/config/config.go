@@ -89,7 +89,7 @@ func SaveConfig(raw string) error {
 
 // ReadCache 读取命名缓存文件的原始内容，不存在时返回空字符串。
 func ReadCache(name string) (string, error) {
-	raw, err := os.ReadFile(filepath.Join(MustDir(), name))
+	raw, err := os.ReadFile(filepath.Join(MustDir(), filepath.Base(name)))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", nil
@@ -99,7 +99,16 @@ func ReadCache(name string) (string, error) {
 	return string(raw), nil
 }
 
-// WriteCache 写入命名缓存文件。
+// WriteCache 以「临时文件 + 重命名」写入命名缓存文件，避免中途崩溃留下半个文件。
 func WriteCache(name string, raw string) error {
-	return os.WriteFile(filepath.Join(MustDir(), name), []byte(raw), 0o644)
+	path := filepath.Join(MustDir(), filepath.Base(name))
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(raw), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
 }

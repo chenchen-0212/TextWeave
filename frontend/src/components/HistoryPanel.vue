@@ -1,10 +1,16 @@
 <script setup lang="ts">
-/** 历史任务（N-06）：导出成功后自动存快照，一键复现当时的全部配置与内容。 */
+/** 历史记录：导出成功后自动存快照，一键复现当时的全部配置与内容。 */
 
-import { useAppStore } from '../../stores/config'
-import ParamSection from './ParamSection.vue'
+import { useAppStore } from '../stores/config'
 
 const store = useAppStore()
+const emit = defineEmits<{ restored: [] }>()
+
+/** 复现后关闭弹窗，让用户直接看到工作区 */
+async function restore(id: string): Promise<void> {
+  await store.restoreHistory(id)
+  emit('restored')
+}
 
 function formatTime(ts: number): string {
   const d = new Date(ts)
@@ -21,14 +27,9 @@ function title(entry: { book: string; channel: string; text: string }): string {
 </script>
 
 <template>
-  <ParamSection
-    title="历史任务"
-    :badge="store.exportHistory.length > 0 ? `${store.exportHistory.length} 条` : '空'"
-    :default-open="false"
-  >
+  <div>
     <div class="field-hint" style="margin-left: 0">
-      每次导出成功后自动存档：文本、背景图、全部参数与渠道设置。换壳追投、复现爆款配置时一键恢复，无需重建。最多保留
-      20 条。
+      每次导出成功后自动存档：文本、背景图、全部参数与渠道设置。换壳追投、复现爆款配置时一键恢复，无需重建。
     </div>
 
     <div v-if="store.exportHistory.length === 0" class="field-hint" style="margin-left: 0">
@@ -38,7 +39,7 @@ function title(entry: { book: string; channel: string; text: string }): string {
     <div v-for="entry in store.exportHistory" :key="entry.id" class="his-item">
       <div class="row between" style="gap: 6px">
         <span class="his-title" :title="entry.outDir">{{ title(entry) }}</span>
-        <button class="btn sm primary" type="button" @click="store.restoreHistory(entry.id)">
+        <button class="btn sm primary" type="button" @click="restore(entry.id)">
           复现
         </button>
         <button class="btn sm ghost" type="button" @click="store.removeHistory(entry.id)">删</button>
@@ -58,7 +59,7 @@ function title(entry: { book: string; channel: string; text: string }): string {
     >
       清空历史
     </button>
-  </ParamSection>
+  </div>
 </template>
 
 <style scoped>

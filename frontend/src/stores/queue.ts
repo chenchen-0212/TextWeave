@@ -315,10 +315,11 @@ export const useQueueStore = defineStore('queue', () => {
           task.status = 'skipped'
           task.message = '已取消'
         } else {
-          task.status = 'done'
-          task.message = app.exportSuccess || '完成'
-          task.config = cloneConfig(app.cfg)
           okCount++
+          // 导出成功：runExport 已把这条任务写进历史，任务本身随即移除
+          const doneId = task.id
+          tasks.value = tasks.value.filter((t) => t.id !== doneId)
+          if (activeTaskId.value === doneId) activeTaskId.value = ''
         }
       } catch (e) {
         task.status = 'failed'

@@ -74,7 +74,7 @@ function statusColor(status?: string): string {
       把每本书 / 每段钩子存成一条任务，之后一键按顺序全部导出；任务书名将作为文件名 {book} 变量与子目录名。
     </div>
 
-    <div v-for="task in queue.tasks" :key="task.id" class="queue-task">
+    <div v-for="task in queue.tasks" :key="task.id" class="queue-task" :class="{ editing: queue.activeTaskId === task.id }">
       <div class="row between" style="gap: 6px">
         <label class="check-row" style="flex: 1; min-width: 0">
           <input v-model="task.enabled" type="checkbox" :disabled="queue.running" />
@@ -91,6 +91,15 @@ function statusColor(status?: string): string {
           class="btn sm ghost"
           type="button"
           :disabled="queue.running"
+          title="把这条任务的样式与正文载入工作区，改完自动存回这条任务"
+          @click="queue.applyTask(task.id)"
+        >
+          复现
+        </button>
+        <button
+          class="btn sm ghost"
+          type="button"
+          :disabled="queue.running"
           @click="queue.removeTask(task.id)"
         >
           删
@@ -100,10 +109,16 @@ function statusColor(status?: string): string {
         <span :style="{ color: statusColor(task.status) }">
           {{ statusText[task.status ?? 'pending'] }}
         </span>
+        <span v-if="queue.activeTaskId === task.id" class="editing-tag">当前编辑</span>
         <span v-if="task.bgName">· {{ task.bgName }}</span>
         <span>· {{ task.text.length }} 字</span>
+        <span v-if="!task.config" title="旧任务没有样式快照，复现时会继承当前样式">· 无样式快照</span>
       </div>
       <div v-if="task.message" class="queue-msg">{{ task.message }}</div>
+    </div>
+
+    <div v-if="queue.tasks.length > 0" class="field-hint" style="margin-left: 0">
+      点击「复现」载入该任务的正文与样式，改完会自动存回这条任务；每条任务导出时各用自己的样式。
     </div>
 
     <div v-if="queue.running && app.exporting" class="field-hint" style="margin-left: 0">
@@ -127,6 +142,15 @@ function statusColor(status?: string): string {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 6px);
   background: var(--bg-2, transparent);
+}
+
+.queue-task.editing {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.editing-tag {
+  color: var(--accent);
 }
 
 .queue-task .check-row {

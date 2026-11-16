@@ -9,6 +9,7 @@
 import { onBeforeUnmount, onMounted } from 'vue'
 import { useAppStore } from './stores/config'
 import * as api from './backend/api'
+import { installAgentHost } from './backend/agentHost'
 
 import ToolBar from './components/ToolBar.vue'
 import StatusBar from './components/StatusBar.vue'
@@ -72,16 +73,21 @@ function hitCoverZone(x: number, y: number): boolean {
   }
 }
 
+/** 本地控制口的指令执行侧（外部 agent 加任务 / 查队列） */
+let offAgentHost: (() => void) | null = null
+
 onMounted(() => {
   void store.init()
   // 以 Go 侧注入的开关为准判断拖放是否真的可用，注册结果会反映到状态栏
   void api.registerFileDrop(onFilesDropped).then((ok) => {
     store.dragDropReady = ok
   })
+  offAgentHost = installAgentHost()
 })
 
 onBeforeUnmount(() => {
   api.unregisterFileDrop()
+  offAgentHost?.()
 })
 </script>
 

@@ -34,6 +34,8 @@ func appOptions(app *App) *options.App {
 			Assets: assets,
 		},
 		OnStartup: app.startup,
+		// 关闭时清掉 agent.json，避免留下过期端口误导外部程序
+		OnShutdown: app.shutdown,
 		Bind: []interface{}{
 			app,
 		},

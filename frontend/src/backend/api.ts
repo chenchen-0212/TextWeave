@@ -12,6 +12,7 @@
 import type { FontEntry, ImageInfo, PyStatus } from '../types'
 
 import {
+  AgentReply,
   AppInfo,
   ConfigDir,
   ImportFont,
@@ -33,7 +34,7 @@ import {
   SaveZip,
 } from '../../wailsjs/go/main/App'
 
-import { OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
+import { EventsOff, EventsOn, OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
 
 export interface ZipEntryPayload {
   name: string
@@ -269,6 +270,41 @@ export async function pyRun(script: string, args: unknown): Promise<unknown> {
   }
   if (!res.ok) throw new Error(res.error || 'Python 脚本执行失败')
   return res.data
+}
+
+// ---------------------------------------------------------------- agent 控制口
+
+/** 一条来自本地控制口的指令（Go 侧 agentapi 下发） */
+export interface AgentRequest {
+  id: string
+  op: string
+  args: unknown
+}
+
+/**
+ * 订阅本地控制口的指令，返回取消订阅函数。
+ *
+ * 事件由 Go 侧 agentapi 在收到 HTTP 请求时发出，处理完必须调 agentReply 回执，
+ * 否则那个 HTTP 请求会一直等到超时。
+ */
+export function onAgentRequest(cb: (req: AgentRequest) => void): () => void {
+  EventsOn('textweave:agent', (data: unknown) => {
+    const d = data as { id?: unknown; op?: unknown; args?: unknown }
+    if (typeof d?.id !== 'string' || typeof d?.op !== 'string') return
+    cb({ id: d.id, op: d.op, args: d.args })
+  })
+  return () => {
+    try {
+      EventsOff('textweave:agent')
+    } catch {
+      // 忽略：未初始化时 off 会抛，不影响主流程
+    }
+  }
+}
+
+/** 回执：把处理结果交回等待中的 HTTP 请求（payload 应为合法 JSON 字符串）。 */
+export async function agentReply(id: string, payload: string): Promise<void> {
+  await AgentReply(id, payload)
 }
 
 // ---------------------------------------------------------------- 杂项

@@ -10,6 +10,9 @@ import (
 	"runtime"
 	"strings"
 
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"textweave/internal/agentapi"
 	"textweave/internal/config"
 	"textweave/internal/fsutil"
 	"textweave/internal/fonts"
@@ -28,6 +31,8 @@ var Version = "0.5.1"
 type App struct {
 	ctx    context.Context
 	runner *pyexec.Runner
+	// agent 是本地控制口，供外部 agent 下发指令；启动失败时为 nil，不影响本体
+	agent *agentapi.Server
 }
 
 // NewApp 创建应用实例。
@@ -37,6 +42,33 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// 本地控制口：把外部 agent 的指令转成前端事件。
+	// 失败只打日志，核心渲染链路照常可用。
+	srv, err := agentapi.Start(config.MustDir(), Version, func(event string, data any) {
+		wailsruntime.EventsEmit(ctx, event, data)
+	})
+	if err != nil {
+		println("[agentapi]", err.Error())
+		return
+	}
+	a.agent = srv
+}
+
+func (a *App) shutdown(_ context.Context) {
+	if a.agent != nil {
+		a.agent.Close()
+		a.agent = nil
+	}
+}
+
+// AgentReply 前端处理完一条 agent 指令后的回执，把结果交回等待中的 HTTP 请求。
+func (a *App) AgentReply(id string, payload string) error {
+	if a.agent == nil {
+		return agentapi.ErrNotStarted
+	}
+	a.agent.Respond(id, payload)
+	return nil
 }
 
 // ---------------------------------------------------------------- 文件选择
@@ -167,7 +199,7 @@ func errString(err error) string {
 
 // AppInfo 返回应用元信息。
 func (a *App) AppInfo() map[string]string {
-	return map[string]string{
+	info := map[string]string{
 		"name":      "文织 TextWeave",
 		"version":   Version,
 		"goVersion": runtime.Version(),
@@ -175,4 +207,8 @@ func (a *App) AppInfo() map[string]string {
 		"arch":      runtime.GOARCH,
 		"configDir": config.MustDir(),
 	}
+	if a.agent != nil {
+		info["agentUrl"] = a.agent.URL()
+	}
+	return info
 }

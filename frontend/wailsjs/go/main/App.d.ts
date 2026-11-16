@@ -5,6 +5,8 @@ import {imageinfo} from '../models';
 import {pyexec} from '../models';
 import {fsutil} from '../models';
 
+export function AgentReply(arg1:string,arg2:string):Promise<void>;
+
 export function AppInfo():Promise<Record<string, string>>;
 
 export function ConfigDir():Promise<string>;

@@ -44,6 +44,13 @@ const pyLabel = computed(() => {
 
     <span class="spacer"></span>
 
+    <template v-if="store.agentNotice">
+      <span style="color: var(--accent)" :title="store.agentNotice">
+        <i class="dot warn"></i>{{ store.agentNotice }}
+      </span>
+      <i class="sep"></i>
+    </template>
+
     <template v-if="!store.dragDropReady">
       <span title="文件拖拽未启用，请使用工具栏的「导入背景图」与「导入文本」按钮">
         <i class="dot warn"></i>拖拽不可用

@@ -102,6 +102,18 @@ export const useAppStore = defineStore('app', () => {
   const fontsLoading = ref(false)
   const fontWarning = ref('')
 
+  /** 外部 agent 改动的提示：配置被别的进程改过，必须让用户看见 */
+  const agentNotice = ref('')
+  let agentNoticeTimer: number | null = null
+  function notifyAgentChange(text: string): void {
+    agentNotice.value = text
+    if (agentNoticeTimer !== null) clearTimeout(agentNoticeTimer)
+    agentNoticeTimer = window.setTimeout(() => {
+      agentNotice.value = ''
+      agentNoticeTimer = null
+    }, 8000)
+  }
+
   // ------------------------------------------------------------ 布局结果
 
   const pages = shallowRef<Page[]>([])
@@ -1459,6 +1471,9 @@ export const useAppStore = defineStore('app', () => {
     fonts,
     fontsLoading,
     fontWarning,
+    // 外部 agent 改动提示
+    agentNotice,
+    notifyAgentChange,
     // 布局
     pages,
     diag,
@@ -1492,6 +1507,8 @@ export const useAppStore = defineStore('app', () => {
     init,
     rebuild,
     scheduleRebuild,
+    // 供队列「复现任务」复用：与历史任务恢复走同一套净化 + 合并
+    mergeConfig,
     setBackground,
     chooseBackground,
     dropBackground,

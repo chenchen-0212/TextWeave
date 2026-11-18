@@ -34,6 +34,7 @@ import * as api from '../backend/api'
 import { base64ToBlob } from '../utils/bytes'
 import { sanitizeConfig } from '../utils/templateCodec'
 import { joinDir, renderSubfolder } from '../utils/filename'
+import { notify as pushToast, type ToastKind } from '../utils/toast'
 import { ensureFontLoaded, waitForFonts } from '../utils/fontLoader'
 import type { BackgroundSource, RenderContext } from '../render/CanvasRenderer'
 import { CanvasRenderer } from '../render/CanvasRenderer'
@@ -117,27 +118,13 @@ export const useAppStore = defineStore('app', () => {
   const fontWarning = ref('')
 
   /** 外部 agent 改动的提示：配置被别的进程改过，必须让用户看见 */
-  const agentNotice = ref('')
-  let agentNoticeTimer: number | null = null
   function notifyAgentChange(text: string): void {
-    agentNotice.value = text
-    if (agentNoticeTimer !== null) clearTimeout(agentNoticeTimer)
-    agentNoticeTimer = window.setTimeout(() => {
-      agentNotice.value = ''
-      agentNoticeTimer = null
-    }, 8000)
+    notify(text, 'warning', 8000)
   }
 
-  /** 状态栏一行的轻量提示：导出被拦截、AI 生成失败等即时反馈 */
-  const toast = ref('')
-  let toastTimer: number | null = null
-  function notify(text: string): void {
-    toast.value = text
-    if (toastTimer !== null) clearTimeout(toastTimer)
-    toastTimer = window.setTimeout(() => {
-      toast.value = ''
-      toastTimer = null
-    }, 6000)
+  /** 轻提示统一走 vue-toastification（utils/toast 里已挂好容器） */
+  function notify(text: string, kind: ToastKind = 'info', timeout?: number): void {
+    pushToast(text, kind, timeout)
   }
 
   // ------------------------------------------------------------ 布局结果
@@ -159,6 +146,13 @@ export const useAppStore = defineStore('app', () => {
   const exportError = ref('')
   const exportSuccess = ref('')
   let cancelRequested = false
+
+  // 这些状态既被界面逻辑读取，也要作为 toast 弹出来。
+  // 放在 store 里监听而不是组件里：批量队列、外部 agent 在弹窗关闭时也会触发它们。
+  watch(bgError, (v) => v && notify(v, 'error'))
+  watch(coverBackgroundError, (v) => v && notify(v, 'error'))
+  watch(exportError, (v) => v && notify(v, 'error'))
+  watch(exportSuccess, (v) => v && notify(v, 'success'))
 
   // ------------------------------------------------------------ 环境信息
 
@@ -868,7 +862,6 @@ export const useAppStore = defineStore('app', () => {
 
     if (coverGenerating.value) {
       exportError.value = '封面生成中，如不想等待请在左侧取消生成'
-      notify(exportError.value)
       return
     }
     if (!cfg.export.dir) {
@@ -931,7 +924,6 @@ export const useAppStore = defineStore('app', () => {
 
     if (coverGenerating.value) {
       exportError.value = '封面生成中，如不想等待请在左侧取消生成'
-      notify(exportError.value)
       return
     }
     if (!cfg.export.dir) {
@@ -1047,7 +1039,6 @@ export const useAppStore = defineStore('app', () => {
 
     if (coverGenerating.value) {
       exportError.value = '封面生成中，如不想等待请在左侧取消生成'
-      notify(exportError.value)
       return
     }
     try {
@@ -1590,11 +1581,8 @@ export const useAppStore = defineStore('app', () => {
     fonts,
     fontsLoading,
     fontWarning,
-    // 外部 agent 改动提示
-    agentNotice,
+    // 提示（vue-toastification）
     notifyAgentChange,
-    // 状态栏轻量提示
-    toast,
     notify,
     // 布局
     pages,

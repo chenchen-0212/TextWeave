@@ -68,9 +68,9 @@ async function saveAs(entry: AILogEntry): Promise<void> {
     const b64 = await api.readFileBase64(entry.path)
     if (!b64) throw new Error('读取图片失败，文件可能已被删除')
     const full = await api.saveImage(dir, fileName(entry.path), b64)
-    app.notify(`已保存到 ${full}`)
+    app.notify(`已保存到 ${full}`, 'success')
   } catch (e) {
-    app.notify(e instanceof Error ? e.message : '保存失败')
+    app.notify(e instanceof Error ? e.message : '保存失败', 'error')
   } finally {
     busyId.value = ''
   }
@@ -80,7 +80,7 @@ async function reveal(entry: AILogEntry): Promise<void> {
   try {
     await api.revealInFolder(entry.path)
   } catch {
-    app.notify('无法打开文件所在目录')
+    app.notify('无法打开文件所在目录', 'warning')
   }
 }
 
@@ -92,7 +92,7 @@ async function openPreview(entry: AILogEntry): Promise<void> {
     closePreview()
     preview.value = { id: entry.id, url: URL.createObjectURL(base64ToBlob(b64, mimeOf(entry.path))) }
   } catch (e) {
-    app.notify(e instanceof Error ? e.message : '打开预览失败')
+    app.notify(e instanceof Error ? e.message : '打开预览失败', 'warning')
   }
 }
 
@@ -151,8 +151,8 @@ function fmtTime(ts: number): string {
           <div class="ai-log-meta">
             {{ entry.size }} · {{ entry.format }} · {{ entry.quality }} · {{ entry.model }}
           </div>
-          <div class="ai-log-endpoint" :title="entry.endpoint">{{ entry.endpoint }}</div>
-          <div class="ai-log-prompt">{{ entry.prompt }}</div>
+          <div class="ai-log-endpoint" :title="entry.endpoint">生图链接：{{ entry.endpoint }}</div>
+          <div class="ai-log-prompt"><span>提示词：</span>{{ entry.prompt }}</div>
         </div>
       </div>
     </template>
@@ -240,6 +240,11 @@ function fmtTime(ts: number): string {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.ai-log-prompt span{
+  color: #000;
+  font-weight: 800;
+}
+
 .ai-preview {
   position: fixed;
   inset: 0;

@@ -8,7 +8,7 @@
  *  - 所有失败路径都有明确文案，不出现「点了没反应」。
  */
 
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import type { MaskType } from '../../types'
 import { useTemplateStore } from '../../stores/templates'
 import { useAppStore } from '../../stores/config'
@@ -48,17 +48,6 @@ const importPlaceholder = computed(
 onMounted(() => {
   tpl.load()
 })
-
-// 提示信息自动消失，避免长期占据面板空间
-let noticeTimer: number | null = null
-watch(
-  () => tpl.noticeText,
-  (v) => {
-    if (noticeTimer !== null) clearTimeout(noticeTimer)
-    if (!v) return
-    noticeTimer = window.setTimeout(() => tpl.clearNotice(), 6000)
-  },
-)
 
 // ---------------------------------------------------------------- 保存
 
@@ -127,7 +116,6 @@ async function pasteFromClipboard(): Promise<void> {
       return
     }
     importText.value = text
-    tpl.clearNotice()
   } catch {
     // 读取剪贴板需要用户授权，被拒绝时给出可操作的替代方案
     tpl.setNotice('读取剪贴板被拒绝，请在下方文本框手动粘贴（Ctrl+V）', 'error')
@@ -162,17 +150,6 @@ function maskLabel(m: MaskType): string {
 
 <template>
   <ParamSection title="模板" :badge="badge">
-    <!-- 提示条 -->
-    <div
-      v-if="tpl.noticeText"
-      class="notice"
-      :class="
-        tpl.noticeKind === 'error' ? 'error' : tpl.noticeKind === 'success' ? 'success' : 'info'
-      "
-    >
-      <span>{{ tpl.noticeText }}</span>
-    </div>
-
     <!-- 保存当前配置 -->
     <button
       v-if="!showSave"

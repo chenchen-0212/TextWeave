@@ -421,10 +421,6 @@ const hasImage = computed(() => {
         <button class="btn sm ghost" type="button" @click="clearBackground">清除</button>
       </div>
 
-      <div v-if="store.coverBackgroundError" class="notice error mt8">
-        {{ store.coverBackgroundError }}
-      </div>
-
       <div class="cover-group-sub">尺寸与位置</div>
       <ParamField
         label="填满方式"

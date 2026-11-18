@@ -95,8 +95,6 @@ async function save(): Promise<void> {
       导出的文件带 API Key，别随手传给他人。
     </div>
 
-    <div v-if="ai.lastError" class="notice error">{{ ai.lastError }}</div>
-
     <div class="row">
       <button class="btn primary grow" type="button" :disabled="ai.saving" @click="save">
         {{ ai.saving ? '保存中…' : '保存配置' }}

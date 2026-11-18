@@ -172,9 +172,6 @@ function toggleSize(id: string, checked: boolean): void {
       <button class="btn sm mt8" type="button" @click="store.cancelExport()">取消</button>
     </div>
 
-    <div v-if="store.exportError" class="notice error mt8">{{ store.exportError }}</div>
-    <div v-if="store.exportSuccess" class="notice success mt8">{{ store.exportSuccess }}</div>
-
     <div class="row mt12">
       <button
         class="btn primary grow"

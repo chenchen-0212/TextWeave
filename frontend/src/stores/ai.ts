@@ -6,11 +6,12 @@
  * 生成状态本身记在 app store 里（渲染与导出都要读），本 store 只负责编排。
  */
 
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import * as api from '../backend/api'
 import { useAppStore } from './config'
 import { pageCanvasSize } from '../core/pageCanvas'
+import { notify } from '../utils/toast'
 import { MAX_COVERS } from '../types'
 
 export interface AIConfig {
@@ -76,8 +77,10 @@ export const useAIStore = defineStore('ai', () => {
   /** 因配置不全被挡下的生成请求，保存配置后自动续上 */
   const pendingGenerate = ref(false)
 
-  /** 生图日志（新的在前） */
-  const logs = ref<AILogEntry[]>([])
+  /** 配置/生成出错统一弹 toast（界面里不再有内联错误条） */
+  watch(lastError, (v) => v && notify(v, 'error'))
+
+  /** 生图日志（新的在前） */  const logs = ref<AILogEntry[]>([])
   /** 只读一次盘；并发调用共享同一个 promise，避免读到一半拿到空列表 */
   let logsPromise: Promise<void> | null = null
 
@@ -121,7 +124,7 @@ export const useAIStore = defineStore('ai', () => {
       await api.saveAIConfig(JSON.stringify(config))
       loaded = true
       lastError.value = ''
-      app.notify('AI 配置已保存')
+      app.notify('AI 配置已保存', 'success')
       if (pendingGenerate.value) {
         pendingGenerate.value = false
         configOpen.value = false
@@ -151,7 +154,7 @@ export const useAIStore = defineStore('ai', () => {
       const path = await api.pickAIConfigSavePath()
       if (!path) return
       await api.writeTextFile(path, JSON.stringify(config, null, 2))
-      app.notify(`AI 配置已导出到 ${path}`)
+      app.notify(`AI 配置已导出到 ${path}`, 'success')
     } catch (e) {
       lastError.value = e instanceof Error ? e.message : '导出 AI 配置失败'
     }
@@ -315,7 +318,7 @@ export const useAIStore = defineStore('ai', () => {
         quality: sent.quality,
         path: res.path,
       })
-      app.notify('封面已生成')
+      app.notify('封面已生成', 'success')
     } catch (e) {
       // 失败或被取消：占位封面没有保留价值
       app.removeCover(coverId)
@@ -323,7 +326,6 @@ export const useAIStore = defineStore('ai', () => {
       // 用户主动取消不算失败
       if (!/cancel/i.test(msg)) {
         lastError.value = msg
-        app.notify(msg)
       }
     } finally {
       app.setCoverGenerating(coverId, false)

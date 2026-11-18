@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 
 import type { StyleConfig } from '../types'
 import { useAppStore } from './config'
+import { notify } from '../utils/toast'
 
 /**
  * 批处理任务队列（对应建议项 N-01）。
@@ -85,6 +86,10 @@ export const useQueueStore = defineStore('queue', () => {
   const lastSummary = ref('')
   const lastError = ref('')
   let cancelRequested = false
+
+  // 队列结果用 toast 呈现（面板关着、由外部 agent 触发时也要能看见）
+  watch(lastError, (v) => v && notify(v, 'error'))
+  watch(lastSummary, (v) => v && notify(v, 'info', 5000))
   /** 复现任务期间挂起回写，避免把别的任务的样式写进来 */
   let loading = false
   /** 连点两个任务时，只有最后一次复现能决定「当前编辑」是哪条 */

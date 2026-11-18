@@ -63,13 +63,6 @@ function statusColor(status?: string): string {
       </button>
     </div>
 
-    <div v-if="queue.lastError" class="notice error" style="margin-bottom: 8px">
-      {{ queue.lastError }}
-    </div>
-    <div v-if="queue.lastSummary" class="notice info" style="margin-bottom: 8px">
-      {{ queue.lastSummary }}
-    </div>
-
     <div v-if="queue.tasks.length === 0" class="field-hint" style="margin-left: 0">
       把每本书 / 每段钩子存成一条任务，之后一键按顺序全部导出；任务书名将作为文件名 {book} 变量与子目录名。
     </div>

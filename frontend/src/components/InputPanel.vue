@@ -61,8 +61,6 @@ const pageHint = computed(() => {
         <span class="name" :title="store.bgPath">{{ store.bgName }}</span>
         <span>{{ bgMeta }}</span>
       </div>
-
-      <div v-if="store.bgError" class="notice error mt8">{{ store.bgError }}</div>
     </div>
 
     <!-- 文本 -->
@@ -116,8 +114,6 @@ const pageHint = computed(() => {
         <span>·</span>
         <span class="strong">{{ pageHint }}</span>
       </div>
-
-      <div v-if="ai.lastError" class="notice error mt8">{{ ai.lastError }}</div>
     </div>
   </div>
 </template>

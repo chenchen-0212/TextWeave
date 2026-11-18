@@ -233,6 +233,7 @@ padding   96         maskPad 48（card 形态）
 | 渲染 | 原生 Canvas 2D（不引入 fabric.js / konva：画布是**只读渲染结果**，不需要对象模型） |
 | 文本切分 | `Intl.Segmenter` + 自研断行器 |
 | 字体 | 系统字体 + 用户上传，**不内置** |
+| 轻提示 | [vue-toastification](https://github.com/Maronato/vue-toastification)（右上角；导出结果、AI 生成、模板操作等即时反馈统一走它） |
 | AI 编排 | [Eino](https://github.com/cloudwego/eino) `compose.Graph`：拼消息 → 文本模型 → 生图（线性三节点，无循环/工具调用） |
 | 大模型接入 | OpenAI 兼容接口，[eino-ext openai](https://github.com/cloudwego/eino-ext) 做文本模型；生图走原生 `net/http`（带重试与超时） |
 

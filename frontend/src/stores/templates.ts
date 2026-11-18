@@ -12,6 +12,7 @@ import {
 } from '../utils/templateCodec'
 import { copyText, downloadText, readTextFromFile } from '../utils/download'
 import { sanitizeFilename } from '../utils/filename'
+import { notify } from '../utils/toast'
 import { useAppStore } from './config'
 
 /**
@@ -37,9 +38,6 @@ export const useTemplateStore = defineStore('templates', () => {
   const items = ref<Template[]>([])
   const loaded = ref(false)
 
-  const noticeText = ref('')
-  const noticeKind = ref<NoticeKind>('info')
-
   /** 当前生成的分享码 */
   const shareCode = ref('')
   const shareName = ref('')
@@ -50,13 +48,9 @@ export const useTemplateStore = defineStore('templates', () => {
   const hasTemplates = computed(() => items.value.length > 0)
   const shareCodeLength = computed(() => shareCode.value.length)
 
+  /** 模板操作的结果统一走全局 toast */
   function setNotice(text: string, kind: NoticeKind = 'info'): void {
-    noticeText.value = text
-    noticeKind.value = kind
-  }
-
-  function clearNotice(): void {
-    noticeText.value = ''
+    notify(text, kind)
   }
 
   // ---------------------------------------------------------------- 持久化
@@ -245,7 +239,6 @@ export const useTemplateStore = defineStore('templates', () => {
     shareCode.value = encodeShareCode(tpl.config, tpl.name)
     shareName.value = tpl.name
     shareSourceId.value = id
-    clearNotice()
     return true
   }
 
@@ -256,7 +249,6 @@ export const useTemplateStore = defineStore('templates', () => {
     shareCode.value = encodeShareCode(app.snapshotConfig(), displayName)
     shareName.value = displayName
     shareSourceId.value = ''
-    clearNotice()
   }
 
   function clearShare(): void {
@@ -341,13 +333,10 @@ export const useTemplateStore = defineStore('templates', () => {
     count,
     hasTemplates,
     loaded,
-    noticeText,
-    noticeKind,
     shareCode,
     shareName,
     shareSourceId,
     shareCodeLength,
-    clearNotice,
     setNotice,
     load,
     find,

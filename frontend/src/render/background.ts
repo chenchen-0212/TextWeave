@@ -232,3 +232,48 @@ export function clearCanvas(
 ): void {
   ctx.clearRect(0, 0, canvasW, canvasH)
 }
+
+/**
+ * 生成中的占位封面。
+ *
+ * 生成时先插一张新封面顶上去，这张图画在它的背景层；结果回来后就地替换，
+ * 用户原有的封面完全不动。画在渲染层而不是 CSS 覆盖层，是为了让预览与
+ * 缩略图看到同一张图，也不会有人误以为封面已经生成好了。
+ */
+export function drawGeneratingPlaceholder(
+  ctx: CanvasRenderingContext2D,
+  canvasW: number,
+  canvasH: number,
+): void {
+  const cx = canvasW / 2
+  const cy = canvasH / 2
+  const ringR = Math.min(canvasW, canvasH) * 0.06
+  const titleSize = Math.round(Math.min(canvasW, canvasH) * 0.038)
+  const font = `system-ui, -apple-system, "Segoe UI", sans-serif`
+
+  ctx.save()
+  ctx.fillStyle = '#22262c'
+  ctx.fillRect(0, 0, canvasW, canvasH)
+
+  // 底环 + 半圈高亮，表示「进行中」
+  const ringY = cy - ringR * 1.8
+  ctx.lineWidth = ringR * 0.22
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.16)'
+  ctx.beginPath()
+  ctx.arc(cx, ringY, ringR, 0, Math.PI * 2)
+  ctx.stroke()
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)'
+  ctx.beginPath()
+  ctx.arc(cx, ringY, ringR, -Math.PI / 2, Math.PI / 2)
+  ctx.stroke()
+
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.82)'
+  ctx.font = `500 ${titleSize}px ${font}`
+  ctx.fillText('AI 封面生成中…', cx, cy + ringR * 0.8)
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.45)'
+  ctx.font = `${Math.round(titleSize * 0.72)}px ${font}`
+  ctx.fillText('预计 1 分钟左右，完成后自动替换', cx, cy + ringR * 0.8 + titleSize * 1.7)
+  ctx.restore()
+}

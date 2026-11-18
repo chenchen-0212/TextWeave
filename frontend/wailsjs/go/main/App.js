@@ -10,8 +10,16 @@ export function AppInfo() {
   return window['go']['main']['App']['AppInfo']();
 }
 
+export function CancelCover(arg1) {
+  return window['go']['main']['App']['CancelCover'](arg1);
+}
+
 export function ConfigDir() {
   return window['go']['main']['App']['ConfigDir']();
+}
+
+export function GenerateCover(arg1, arg2) {
+  return window['go']['main']['App']['GenerateCover'](arg1, arg2);
 }
 
 export function ImportFont(arg1) {
@@ -22,8 +30,20 @@ export function ListFonts() {
   return window['go']['main']['App']['ListFonts']();
 }
 
+export function LoadAIConfig() {
+  return window['go']['main']['App']['LoadAIConfig']();
+}
+
 export function LoadConfig() {
   return window['go']['main']['App']['LoadConfig']();
+}
+
+export function PickAIConfigFile() {
+  return window['go']['main']['App']['PickAIConfigFile']();
+}
+
+export function PickAIConfigSavePath() {
+  return window['go']['main']['App']['PickAIConfigSavePath']();
 }
 
 export function PickFontFile() {
@@ -74,6 +94,10 @@ export function RevealInFolder(arg1) {
   return window['go']['main']['App']['RevealInFolder'](arg1);
 }
 
+export function SaveAIConfig(arg1) {
+  return window['go']['main']['App']['SaveAIConfig'](arg1);
+}
+
 export function SaveConfig(arg1) {
   return window['go']['main']['App']['SaveConfig'](arg1);
 }
@@ -88,4 +112,8 @@ export function SaveZip(arg1, arg2, arg3) {
 
 export function WriteCache(arg1, arg2) {
   return window['go']['main']['App']['WriteCache'](arg1, arg2);
+}
+
+export function WriteTextFile(arg1, arg2) {
+  return window['go']['main']['App']['WriteTextFile'](arg1, arg2);
 }

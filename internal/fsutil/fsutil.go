@@ -52,6 +52,18 @@ func SaveImage(dir, filename, data string) (string, error) {
 	return full, nil
 }
 
+// WriteTextFile 把文本写到指定路径（导出 AI 配置等小文件，路径由保存对话框给出）。
+// 文件里可能含密钥，只给当前用户读写。
+func WriteTextFile(path, content string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("未指定文件路径")
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		return fmt.Errorf("写入文件失败: %w", err)
+	}
+	return nil
+}
+
 // ZipEntry 表示一个待写入压缩包的条目（内容为 base64）。
 type ZipEntry struct {
 	Name string `json:"name"`

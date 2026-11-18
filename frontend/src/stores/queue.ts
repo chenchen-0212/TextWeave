@@ -238,6 +238,10 @@ export const useQueueStore = defineStore('queue', () => {
    */
   async function runAll(onlyIds?: string[]): Promise<void> {
     if (running.value) return
+    if (app.coverGenerating) {
+      lastError.value = '封面生成中，请先取消或等待完成'
+      return
+    }
     if (!app.cfg.export.dir) {
       lastError.value = '请先在「导出」分区选择输出目录'
       return

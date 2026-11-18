@@ -44,6 +44,13 @@ const pyLabel = computed(() => {
 
     <span class="spacer"></span>
 
+    <template v-if="store.toast">
+      <span style="color: var(--accent)" :title="store.toast">
+        <i class="dot warn"></i>{{ store.toast }}
+      </span>
+      <i class="sep"></i>
+    </template>
+
     <template v-if="store.agentNotice">
       <span style="color: var(--accent)" :title="store.agentNotice">
         <i class="dot warn"></i>{{ store.agentNotice }}

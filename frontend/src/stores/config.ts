@@ -96,6 +96,20 @@ export const useAppStore = defineStore('app', () => {
    */
   const overlayImages = shallowRef<Map<string, BackgroundSource>>(new Map())
 
+  /** 正在生成 AI 封面的封面 id。渲染画占位图、导出据此拦截。 */
+  const generatingCovers = shallowRef<Set<string>>(new Set())
+
+  function setCoverGenerating(id: string, on: boolean): void {
+    if (generatingCovers.value.has(id) === on) return
+    // 整体换新 Set 才能触发 shallowRef 更新
+    const next = new Set(generatingCovers.value)
+    if (on) next.add(id)
+    else next.delete(id)
+    generatingCovers.value = next
+  }
+
+  const coverGenerating = computed(() => generatingCovers.value.size > 0)
+
   // ------------------------------------------------------------ 字体
 
   const fonts = ref<FontEntry[]>([])
@@ -112,6 +126,18 @@ export const useAppStore = defineStore('app', () => {
       agentNotice.value = ''
       agentNoticeTimer = null
     }, 8000)
+  }
+
+  /** 状态栏一行的轻量提示：导出被拦截、AI 生成失败等即时反馈 */
+  const toast = ref('')
+  let toastTimer: number | null = null
+  function notify(text: string): void {
+    toast.value = text
+    if (toastTimer !== null) clearTimeout(toastTimer)
+    toastTimer = window.setTimeout(() => {
+      toast.value = ''
+      toastTimer = null
+    }, 6000)
   }
 
   // ------------------------------------------------------------ 布局结果
@@ -177,6 +203,8 @@ export const useAppStore = defineStore('app', () => {
       coverImages: coverImages.value,
       // 引导元素图片缓存
       overlayImages: overlayImages.value,
+      // 正在生成 AI 封面的封面（整页画占位图）
+      generatingCovers: generatingCovers.value,
     }
   })
 
@@ -838,6 +866,11 @@ export const useAppStore = defineStore('app', () => {
     exportError.value = ''
     exportSuccess.value = ''
 
+    if (coverGenerating.value) {
+      exportError.value = '封面生成中，如不想等待请在左侧取消生成'
+      notify(exportError.value)
+      return
+    }
     if (!cfg.export.dir) {
       exportError.value = '请先选择输出目录'
       return
@@ -896,6 +929,11 @@ export const useAppStore = defineStore('app', () => {
     exportError.value = ''
     exportSuccess.value = ''
 
+    if (coverGenerating.value) {
+      exportError.value = '封面生成中，如不想等待请在左侧取消生成'
+      notify(exportError.value)
+      return
+    }
     if (!cfg.export.dir) {
       exportError.value = '请先选择输出目录'
       return
@@ -1006,6 +1044,12 @@ export const useAppStore = defineStore('app', () => {
     if (!page) return
     exportError.value = ''
     exportSuccess.value = ''
+
+    if (coverGenerating.value) {
+      exportError.value = '封面生成中，如不想等待请在左侧取消生成'
+      notify(exportError.value)
+      return
+    }
     try {
       const full = await exportSinglePage(
         page,
@@ -1549,6 +1593,9 @@ export const useAppStore = defineStore('app', () => {
     // 外部 agent 改动提示
     agentNotice,
     notifyAgentChange,
+    // 状态栏轻量提示
+    toast,
+    notify,
     // 布局
     pages,
     diag,
@@ -1592,6 +1639,10 @@ export const useAppStore = defineStore('app', () => {
     // 封面
     coverImages,
     coverBackgroundError,
+    // AI 封面生成中的封面
+    generatingCovers,
+    setCoverGenerating,
+    coverGenerating,
     activeCover,
     setActiveCover,
     addCover,

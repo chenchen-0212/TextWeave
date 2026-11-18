@@ -9,9 +9,11 @@
 
 import { computed } from 'vue'
 import { useAppStore } from '../stores/config'
+import { useAIStore } from '../stores/ai'
 import { formatBytes } from '../utils/bytes'
 
 const store = useAppStore()
+const ai = useAIStore()
 
 const bgMeta = computed(() => {
   const info = store.bgInfo
@@ -68,6 +70,19 @@ const pageHint = computed(() => {
       <div class="input-block-title">
         <span>文本</span>
         <span class="grow" />
+        <button
+          class="btn sm"
+          type="button"
+          :disabled="!ai.activeGenerating && !store.text.trim()"
+          :title="
+            ai.activeGenerating
+              ? '取消这次封面生成'
+              : '把正文交给 AI，生成一张新的封面（约 1 分钟）'
+          "
+          @click="ai.toggle()"
+        >
+          {{ ai.activeGenerating ? '取消生成' : '生成封面' }}
+        </button>
         <button class="btn sm ghost" type="button" @click="store.importTextFile()">
           导入 txt
         </button>
@@ -101,6 +116,8 @@ const pageHint = computed(() => {
         <span>·</span>
         <span class="strong">{{ pageHint }}</span>
       </div>
+
+      <div v-if="ai.lastError" class="notice error mt8">{{ ai.lastError }}</div>
     </div>
   </div>
 </template>

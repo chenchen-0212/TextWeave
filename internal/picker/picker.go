@@ -46,3 +46,25 @@ func OutputDir(ctx context.Context) (string, error) {
 		Title: "选择输出目录",
 	})
 }
+
+// JSONFile 打开 .json 文件选择对话框（导入 AI 配置）。
+func JSONFile(ctx context.Context) (string, error) {
+	return runtime.OpenFileDialog(ctx, runtime.OpenDialogOptions{
+		Title: "导入 AI 配置",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "JSON 文件 (*.json)", Pattern: "*.json"},
+			{DisplayName: "所有文件", Pattern: "*.*"},
+		},
+	})
+}
+
+// SaveJSON 打开「另存为」对话框（导出 AI 配置），返回完整路径。
+func SaveJSON(ctx context.Context) (string, error) {
+	return runtime.SaveFileDialog(ctx, runtime.SaveDialogOptions{
+		Title:           "导出 AI 配置",
+		DefaultFilename: "textweave-ai-config.json",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "JSON 文件 (*.json)", Pattern: "*.json"},
+		},
+	})
+}

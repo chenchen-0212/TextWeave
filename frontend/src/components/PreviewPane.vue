@@ -401,10 +401,10 @@ defineExpose({ rerender: schedule })
             "
           ></div>
         </div>
-
+<!--
         <div v-if="isCoverPage && coverBoxes.length === 0" class="cover-drag-empty">
           该封面暂无文本 · 在右侧「封面」分区添加
-        </div>
+        </div> -->
       </div>
 
       <div v-if="!store.hasContent" class="preview-empty">

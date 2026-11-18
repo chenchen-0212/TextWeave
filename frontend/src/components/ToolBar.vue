@@ -3,18 +3,38 @@
 
 import { computed, ref } from 'vue'
 import { useAppStore } from '../stores/config'
+import { useAIStore } from '../stores/ai'
 import { useQueueStore } from '../stores/queue'
 import { useTemplateStore } from '../stores/templates'
+import AIConfigDialog from './AIConfigDialog.vue'
+import AILogPanel from './AILogPanel.vue'
 import HistoryPanel from './HistoryPanel.vue'
 import ModalDialog from './ModalDialog.vue'
 import QueuePanel from './QueuePanel.vue'
 
 const store = useAppStore()
+const ai = useAIStore()
 const queue = useQueueStore()
 const tpl = useTemplateStore()
 
 /** 当前打开的弹窗；同一时间只开一个 */
-const openPanel = ref<'history' | 'queue' | null>(null)
+const openPanel = ref<'history' | 'queue' | 'ai' | 'ailog' | null>(null)
+
+/** 一键生成封面发现配置不全时会自动置 ai.configOpen，两个入口共用一个弹窗 */
+const aiDialogOpen = computed(() => openPanel.value === 'ai' || ai.configOpen)
+
+function openAIConfig(): void {
+  openPanel.value = 'ai'
+  void ai.load()
+}
+
+function closeAIConfig(): void {
+  openPanel.value = null
+  ai.configOpen = false
+}
+
+// 工具栏上的日志角标要在启动时就准确，不能等第一次打开日志面板
+void ai.loadLogs()
 
 const exportLabel = computed(() =>
   store.totalPages > 0 ? `导出全部（${store.totalPages} 张）` : '导出全部',
@@ -63,6 +83,17 @@ function quickSaveTemplate(): void {
       <button
         class="btn"
         type="button"
+        title="编辑文本模型与生图模型的供应商配置"
+        @click="openAIConfig"
+      >
+        AI 配置
+      </button>
+      <button class="btn" type="button" title="查看每次生成的提示词、请求配置与图片" @click="openPanel = 'ailog'">
+        AI 日志<span v-if="ai.logs.length" class="tb-badge">{{ ai.logs.length }}</span>
+      </button>
+      <button
+        class="btn"
+        type="button"
         title="按当前参数快速存为一个模板，可在右侧「模板」分区中改名或分享"
         @click="quickSaveTemplate"
       >
@@ -105,6 +136,24 @@ function quickSaveTemplate(): void {
       @close="openPanel = null"
     >
       <QueuePanel @applied="openPanel = null" />
+    </ModalDialog>
+
+    <ModalDialog
+      v-else-if="openPanel === 'ailog'"
+      title="AI 生图日志"
+      :subtitle="`${ai.logs.length} 条 · 提示词 / 请求配置 / 生成图片`"
+      @close="openPanel = null"
+    >
+      <AILogPanel />
+    </ModalDialog>
+
+    <ModalDialog
+      v-if="aiDialogOpen"
+      title="AI 配置"
+      subtitle="文本模型出提示词，生图模型出图 · 仅存本机 ai.json"
+      @close="closeAIConfig"
+    >
+      <AIConfigDialog @saved="closeAIConfig" />
     </ModalDialog>
   </header>
 </template>

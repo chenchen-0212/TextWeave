@@ -14,10 +14,15 @@ import type { FontEntry, ImageInfo, PyStatus } from '../types'
 import {
   AgentReply,
   AppInfo,
+  CancelCover,
   ConfigDir,
+  GenerateCover,
   ImportFont,
   ListFonts,
+  LoadAIConfig,
   LoadConfig,
+  PickAIConfigFile,
+  PickAIConfigSavePath,
   PickFontFile,
   PickImage,
   PickOutputDir,
@@ -30,10 +35,12 @@ import {
   ReadTextFile,
   RemoveFont,
   RevealInFolder,
+  SaveAIConfig,
   SaveConfig,
   SaveImage,
   SaveZip,
   WriteCache,
+  WriteTextFile,
 } from '../../wailsjs/go/main/App'
 
 import { EventsOff, EventsOn, OnFileDrop, OnFileDropOff } from '../../wailsjs/runtime/runtime'
@@ -282,6 +289,76 @@ export async function pyRun(script: string, args: unknown): Promise<unknown> {
   }
   if (!res.ok) throw new Error(res.error || 'Python 脚本执行失败')
   return res.data
+}
+
+// ---------------------------------------------------------------- AI 封面
+
+/** 一次封面生成的输入；宽高取封面画布配置（含像素倍率）。 */
+export interface GenerateCoverRequest {
+  article: string
+  coverId: string
+  width: number
+  height: number
+  format: string
+}
+
+/** 生成结果：图片已由 Go 落盘，这里只拿路径与提示词。 */
+export interface GeneratedCover {
+  path: string
+  prompt: string
+}
+
+export async function loadAIConfig(): Promise<string> {
+  try {
+    return (await LoadAIConfig()) || ''
+  } catch {
+    return ''
+  }
+}
+
+export async function saveAIConfig(raw: string): Promise<void> {
+  await SaveAIConfig(raw)
+}
+
+export async function generateCover(
+  jobId: string,
+  req: GenerateCoverRequest,
+): Promise<GeneratedCover> {
+  try {
+    return (await GenerateCover(jobId, req)) as unknown as GeneratedCover
+  } catch (e) {
+    throw new Error(describeError(e, '生成封面失败'))
+  }
+}
+
+export async function cancelCover(jobId: string): Promise<void> {
+  try {
+    await CancelCover(jobId)
+  } catch {
+    // 任务已结束：取消是幂等的，不必打扰用户
+  }
+}
+
+/** 选择要导入的 AI 配置文件；用户取消返回空字符串。 */
+export async function pickAIConfigFile(): Promise<string> {
+  try {
+    return (await PickAIConfigFile()) || ''
+  } catch (e) {
+    throw new Error(describeError(e, '打开配置文件对话框失败'))
+  }
+}
+
+/** 选择 AI 配置的导出路径；用户取消返回空字符串。 */
+export async function pickAIConfigSavePath(): Promise<string> {
+  try {
+    return (await PickAIConfigSavePath()) || ''
+  } catch (e) {
+    throw new Error(describeError(e, '打开保存对话框失败'))
+  }
+}
+
+export async function writeTextFile(path: string, content: string): Promise<void> {
+  await WriteTextFile(path, content)
 }
 
 // ---------------------------------------------------------------- agent 控制口

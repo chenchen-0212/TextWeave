@@ -13,16 +13,17 @@ import (
 	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"textweave/internal/agentapi"
+	"textweave/internal/aicover"
 	"textweave/internal/config"
-	"textweave/internal/fsutil"
 	"textweave/internal/fonts"
+	"textweave/internal/fsutil"
 	"textweave/internal/imageinfo"
 	"textweave/internal/picker"
 	"textweave/internal/pyexec"
 )
 
 // Version 应用版本号，随构建可注入。
-var Version = "0.5.1"
+var Version = "0.6.0"
 
 // App 是暴露给前端的绑定对象。
 //
@@ -162,6 +163,37 @@ func (a *App) WriteCache(name string, raw string) error {
 		return fmt.Errorf("内容不是合法 JSON，已拒绝写入")
 	}
 	return config.WriteCache(name, raw)
+}
+
+// ---------------------------------------------------------------- AI 封面
+
+// LoadAIConfig 读取 AI 供应商配置（原始 JSON，含密钥，仅本机使用）。
+func (a *App) LoadAIConfig() (string, error) { return aicover.LoadRaw() }
+
+// SaveAIConfig 保存 AI 供应商配置。
+func (a *App) SaveAIConfig(raw string) error { return aicover.SaveRaw(raw) }
+
+// GenerateCover 跑一次「正文 → 提示词 → 图片」工作流，图片落盘后返回路径。
+//
+// 阻塞到生成为止；取消由 CancelCover 触发（jobID 用封面 id，多封面互不影响）。
+func (a *App) GenerateCover(jobID string, req aicover.Request) (*aicover.Result, error) {
+	ctx, finish := aicover.Start(a.ctx, jobID)
+	defer finish()
+	return aicover.Run(ctx, req)
+}
+
+// CancelCover 取消进行中的生成；任务已结束时无副作用。
+func (a *App) CancelCover(jobID string) { aicover.Cancel(jobID) }
+
+// PickAIConfigFile 选择要导入的 AI 配置文件（.json）。用户取消时返回空字符串。
+func (a *App) PickAIConfigFile() (string, error) { return picker.JSONFile(a.ctx) }
+
+// PickAIConfigSavePath 选择 AI 配置的导出路径。用户取消时返回空字符串。
+func (a *App) PickAIConfigSavePath() (string, error) { return picker.SaveJSON(a.ctx) }
+
+// WriteTextFile 把文本写入指定路径（导出 AI 配置用）。
+func (a *App) WriteTextFile(path string, content string) error {
+	return fsutil.WriteTextFile(path, content)
 }
 
 // ---------------------------------------------------------------- 字体

@@ -1,3 +1,42 @@
+export namespace aicover {
+	
+	export class Request {
+	    article: string;
+	    coverId: string;
+	    width: number;
+	    height: number;
+	    format: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Request(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.article = source["article"];
+	        this.coverId = source["coverId"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.format = source["format"];
+	    }
+	}
+	export class Result {
+	    path: string;
+	    prompt: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Result(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.prompt = source["prompt"];
+	    }
+	}
+
+}
+
 export namespace fonts {
 	
 	export class Entry {

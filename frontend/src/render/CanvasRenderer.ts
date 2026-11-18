@@ -3,6 +3,7 @@ import { FontMetrics } from '../core/FontMetrics'
 import {
   drawBackground,
   drawCoverBackground,
+  drawGeneratingPlaceholder,
   drawVignette,
   type Rect,
 } from './background'
@@ -33,6 +34,8 @@ export interface RenderContext {
   coverImages?: Map<string, BackgroundSource>
   /** 引导元素图片缓存，key 为文件绝对路径 */
   overlayImages?: Map<string, BackgroundSource>
+  /** 正在生成 AI 封面的封面 id；这些封面整页画占位图 */
+  generatingCovers?: Set<string>
 }
 
 export class CanvasRenderer {
@@ -107,44 +110,54 @@ export class CanvasRenderer {
     let maskImage: CanvasImageSource | undefined
 
     const coverBg = cover?.background
+    // 生成中的占位封面：背景层整段跳过，占位图在蒙版之后绘制，
+    // 否则进度文案会被封面蒙版压暗
+    const generating = cover ? rc.generatingCovers?.has(cover.id) === true : false
     const standaloneSrc =
       cover && coverBg?.useOwn && coverBg.blendMode === 'standalone'
         ? rc.coverImages?.get(coverBg.path)
         : undefined
 
-    if (standaloneSrc && cover) {
-      ctx.fillStyle = '#2b2f36'
-      ctx.fillRect(0, 0, logicalW, logicalH)
-      this.lastBgRect = drawCoverBackground(
-        ctx,
-        standaloneSrc.image,
-        standaloneSrc.width,
-        standaloneSrc.height,
-        cover.background,
-        logicalW,
-        logicalH,
-      )
-      maskImage = standaloneSrc.image
-    } else if (background) {
-      this.lastBgRect = drawBackground(
-        ctx,
-        background.image,
-        background.width,
-        background.height,
-        cfg.background,
-        logicalW,
-        logicalH,
-      )
-      drawVignette(ctx, logicalW, logicalH, cfg.background.vignette)
-      maskImage = background.image
-    } else {
-      // 尚未导入背景图时铺一层中性底色，让预览可读
-      ctx.fillStyle = '#2b2f36'
-      ctx.fillRect(0, 0, logicalW, logicalH)
+    if (!generating) {
+      if (standaloneSrc && cover) {
+        ctx.fillStyle = '#2b2f36'
+        ctx.fillRect(0, 0, logicalW, logicalH)
+        this.lastBgRect = drawCoverBackground(
+          ctx,
+          standaloneSrc.image,
+          standaloneSrc.width,
+          standaloneSrc.height,
+          cover.background,
+          logicalW,
+          logicalH,
+        )
+        maskImage = standaloneSrc.image
+      } else if (background) {
+        this.lastBgRect = drawBackground(
+          ctx,
+          background.image,
+          background.width,
+          background.height,
+          cfg.background,
+          logicalW,
+          logicalH,
+        )
+        drawVignette(ctx, logicalW, logicalH, cfg.background.vignette)
+        maskImage = background.image
+      } else {
+        // 尚未导入背景图时铺一层中性底色，让预览可读
+        ctx.fillStyle = '#2b2f36'
+        ctx.fillRect(0, 0, logicalW, logicalH)
+      }
     }
 
     // 封面专属背景的常规路径 —— 按 opacity / blendMode / tint 叠在正文背景之上
-    if (cover && cover.background.useOwn && cover.background.blendMode !== 'standalone') {
+    if (
+      !generating &&
+      cover &&
+      cover.background.useOwn &&
+      cover.background.blendMode !== 'standalone'
+    ) {
       const src = rc.coverImages?.get(cover.background.path)
       if (src) {
         drawCoverBackground(
@@ -181,6 +194,9 @@ export class CanvasRenderer {
       maskImage,
       this.lastBgRect,
     )
+
+    // 生成中的占位封面压在蒙版之上，进度文案保持可读；封面文字与引导元素照常叠上
+    if (generating) drawGeneratingPlaceholder(ctx, logicalW, logicalH)
 
     // 4) 文字
     if (cover) {

@@ -8,8 +8,12 @@ name: Release
 #   runner，是最省事的一次性出全平台产物的方式。
 #
 # 触发方式：
-#   1. 推送形如 v0.2.0 的 tag → 自动构建并创建 GitHub Release
-#   2. 在 Actions 页面手动触发 → 只构建并上传 artifacts
+#   1. 推送形如 v0.6.1 的 tag → 两个平台构建完，自动把安装包挂到该 tag 的 Release
+#   2. Actions 页面手动触发：
+#      · 选分支（默认 main）→ 只构建，产物进 Actions 的 artifacts，不发布
+#      · 选 tag（gh workflow run Release --ref v0.6.1）→ 与推送 tag 等价，会发布
+#
+# 版本号由 tag 推导（去掉前缀 v），改版本只需打 tag，不用再动本文件。
 
 on:
   push:
@@ -24,16 +28,44 @@ env:
   WAILS_VERSION: v2.15.0
   GO_VERSION: '1.25'
   NODE_VERSION: '22'
-  APP_VERSION: '0.2.0'
+
+# 同一个 ref 只跑一条流水线，避免两次 release 同时往一个 Release 上传资产
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------- Windows
   windows:
     name: Windows (exe + NSIS 安装包)
     runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 防止「tag 是 v0.6.2、代码里还是 0.6.1」这种错版发布
+      - name: 校验版本号与 tag 一致
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          src=$(sed -n 's/^var Version = "\(.*\)"/\1/p' app.go)
+          want="${{ steps.ver.outputs.version }}"
+          echo "app.go=$src tag=$want"
+          if [ "$src" != "$want" ]; then
+            echo "::error::app.go 的 Version（$src）与 tag（${{ github.ref_name }}）不一致"
+            exit 1
+          fi
 
       - name: 安装 Go
         uses: actions/setup-go@v5
@@ -66,8 +98,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Copy-Item build\bin\TextWeave.exe "dist\TextWeave-$env:APP_VERSION-windows-amd64-portable.exe"
-          Copy-Item build\bin\textweave-amd64-installer.exe "dist\TextWeave-$env:APP_VERSION-windows-amd64-setup.exe"
+          $v = "${{ steps.ver.outputs.version }}"
+          Copy-Item build\bin\TextWeave.exe "dist\TextWeave-$v-windows-amd64-portable.exe"
+          Copy-Item build\bin\textweave-amd64-installer.exe "dist\TextWeave-$v-windows-amd64-setup.exe"
           Get-ChildItem dist | Format-Table Name, Length
 
       - name: 上传产物
@@ -81,9 +114,20 @@ jobs:
   macos:
     name: macOS (universal .app + .dmg)
     runs-on: macos-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: 解析版本号
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=dev" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: 安装 Go
         uses: actions/setup-go@v5
@@ -106,13 +150,12 @@ jobs:
 
       - name: 打包 .dmg 与 .zip
         env:
-          VERSION: ${{ env.APP_VERSION }}
           # 配置了签名证书与公证凭据时会自动签名并公证，否则产出未签名版本
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: bash scripts/package-macos.sh "${{ env.APP_VERSION }}"
+        run: bash scripts/package-macos.sh "${{ steps.ver.outputs.version }}"
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
@@ -125,10 +168,12 @@ jobs:
 
   # ---------------------------------------------------------------- 发布
   release:
-    name: 创建 Release
+    name: 发布到 GitHub Release
     needs: [windows, macos]
+    # 只有 tag（推送 tag 或在 tag 上手跑）才发布；在分支上手动触发只出 artifacts
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: 下载全部产物
@@ -136,11 +181,20 @@ jobs:
         with:
           path: artifacts
 
-      - name: 创建 Release
+      - name: 列出待发布文件
+        run: find artifacts -type f -printf '%p  %k KB\n' | sort
+
+      - name: 创建 / 更新 Release
         uses: softprops/action-gh-release@v2
         with:
-          draft: false
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          # 说明由 GitHub 按提交生成；如已手工写过说明，重跑会被覆盖
           generate_release_notes: true
+          make_latest: true
+          # 重跑同一条流水线时覆盖同名资产，而不是报 already_exists
+          overwrite_files: true
+          fail_on_unmatched_files: true
           files: |
             artifacts/textweave-windows/*.exe
             artifacts/textweave-macos/*.dmg

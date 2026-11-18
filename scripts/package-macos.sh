@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-VERSION="${1:-${VERSION:-0.5.1}}"
+VERSION="${1:-${VERSION:-0.6.1}}"
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_ROOT"
 

@@ -4,7 +4,7 @@
 import { QUALITY_OPTIONS, useAIStore } from '../stores/ai'
 import ParamField from './ui/ParamField.vue'
 
-const ai = useAIStore()
+const ai:any = useAIStore()
 const emit = defineEmits<{ saved: [] }>()
 
 async function save(): Promise<void> {
@@ -21,7 +21,7 @@ async function save(): Promise<void> {
       type="text"
       :modelValue="ai.config.llm.baseUrl"
       placeholder="https://api.deepseek.com/v1"
-      @update:modelValue="(v) => (ai.config.llm.baseUrl = String(v))"
+      @update:modelValue="(v:any) => (ai.config.llm.baseUrl = String(v))"
     />
     <ParamField
       label="API Key"

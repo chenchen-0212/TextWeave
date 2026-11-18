@@ -64,11 +64,30 @@ TextWeave 落在两者的交集上：**A 类的分段分页引擎 + B 类的背�
 ### 一键生成封面（可选）
 
 - 左侧「生成封面」把正文交给文本模型出**生图提示词**，再用生图模型（OpenAI 兼容 images 接口）出图，作为**一张新封面**的底图；生成期间先插入一张占位封面（约 1 分钟），原有封面不受影响
-- 工作流由 [Eino](https://github.com/cloudwego/eino) 图编排，尺寸与格式沿用「画布」配置
+- 工作流由 [Eino](https://github.com/cloudwego/eino) 图编排，尺寸与格式沿用「画布」配置；提示词末尾会追加一行画幅说明，让模型按封面比例构图
 - 供应商配置（请求地址 / API Key / 模型 / 系统提示词 / 上下文长度）存在本机 `ai.json`，不随模板与分享码外发；支持导出 / 导入 `.json` 做备份或换机迁移（导出文件含 API Key，注意保管）
 - 每张封面各自生成、互不影响；生成中显示占位图并可取消，期间导出会被拦下
 - 生图请求带重试与超时兜底（3 次尝试，1s / 3s 退避）
 - **AI 生图日志**：每次成功都记录提示词、请求过去的配置（不含密钥）与图片，可在工具栏「AI 日志」里查看、放大预览、另存到指定目录
+
+配置文件都在应用数据目录（Windows 为 `%AppData%\TextWeave`）：
+
+```
+ai.json      # 供应商配置（含密钥，权限 0600）
+ai-log.json  # 生图日志（最多 30 条）
+covers/      # 生成的封面图片
+```
+
+`ai.json` 的结构（留空的项就是界面里待填的字段）：
+
+```json
+{
+  "llm":   { "baseUrl": "", "apiKey": "", "model": "", "systemPrompt": "", "contextLength": 8000 },
+  "image": { "baseUrl": "", "apiKey": "", "model": "", "quality": "high" }
+}
+```
+
+> `image.baseUrl` 要填**完整请求地址**（含 `/images/generations` 之类后缀），程序不再拼后缀；`llm.baseUrl` 是基础地址，由 SDK 追加 `/chat/completions`。`contextLength` 只用于截断正文，按 1 字 ≈ 1 token 估算。
 
 ### 模板与分享
 
@@ -80,7 +99,7 @@ TextWeave 落在两者的交集上：**A 类的分段分页引擎 + B 类的背�
 - 画布尺寸完全自定义，内置手机尺寸预设（1080×1920 / 1080×2340 / 1179×2556 / 1440×3200）
 - 支持拖拽导入背景图与文本文件
 - 参数自动持久化，重启恢复
-- Python 增强通道（预留，用于未来的图像分析 / AI 能力），**核心链路完全不依赖 Python**
+- Python 增强通道（预留扩展位，排版、导出与 AI 封面都**不依赖** Python）
 
 ---
 
@@ -107,11 +126,13 @@ TextWeave 落在两者的交集上：**A 类的分段分页引擎 + B 类的背�
 
 | 依赖 | 版本 | 备注 |
 |---|---|---|
-| Go | 1.21+（本项目在 1.26.5 上验证） | 需开启 cgo |
+| Go | 1.25+（`go.mod` 要求 1.25.0，本项目在 1.26.5 上验证） | 需开启 cgo |
 | Node.js | 18+（本项目在 22.23.2 上验证） | 用于构建前端 |
 | Wails CLI | v2.15.0 | `go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0` |
 | NSIS | 3.x（仅 Windows 打包安装包时需要） | `winget install -e --id NSIS.NSIS` |
 | Xcode Command Line Tools | （仅 macOS） | `xcode-select --install` |
+
+> 首次构建会联网拉取 Go 依赖（含 Eino 与 eino-ext），国内网络建议先设 `GOPROXY=https://goproxy.cn,direct`。
 
 ```bash
 git clone https://github.com/chenchen-0212/TextWeave.git
@@ -155,9 +176,9 @@ bash scripts/build-macos.sh
 
 1. **导入背景图**：点击「导入背景图」，或直接把图片拖进窗口。支持 PNG / JPG / WebP。
 2. **导入文本**：在左侧输入框粘贴，或点击「导入文本」选择 `.txt` 文件，也可直接拖入。
-3. **调参**：右侧参数面板分区折叠，依次为画布 / 背景图 / 蒙版 / 文字 / 封面 / 张数约束 / 导出。参数一改，中间预览立即重算全部页面。
+3. **调参**：右侧参数面板分区折叠，依次为画布 / 封面尺寸 / 背景图 / 蒙版 / 文字 / 张数约束 / 封面 / 引导元素 / 导出 / 模板。参数一改，中间预览立即重算全部页面。AI 供应商配置在工具栏「AI 配置」里，生成记录在「AI 日志」里。
 4. **设置张数**（可选）：在「张数约束」里填 `[最小张数, 最大张数]`（默认 `[1, 18]`，18 对应小红书单篇图文上限），系统自动搜索最优字号。
-5. **加封面**（可选）：在封面面板里填写主副标题，可保存多套封面方案随时切换，也可为封面指定专属背景图。
+5. **加封面**（可选）：在封面面板里填写主副标题，可保存多套封面方案随时切换，也可为封面指定专属背景图。也可以点左侧「生成封面」让 AI 按正文生成一张新封面——首次会先弹「AI 配置」，填好文本模型与生图模型即可，约 1 分钟，期间在占位封面上显示进度、可取消。
 6. **导出**：选择输出目录与文件名模板，点击「导出全部」。默认逐张落盘，导完可直接拖进平台上传。
 
 **关键交互原则**：所见即所得，参数一变预览立即重算，不需要点「生成」。
@@ -200,16 +221,20 @@ padding   96         maskPad 48（card 形态）
 
 **渲染管线七步**：文本规范化 → 段落切分 → 字素断行 + 禁则修正 → 超页段落切分 → 容量装箱分页 → 目标张数约束（二分搜索回环）→ Canvas 合成。
 
+**AI 封面流水线**：正文按上下文预算截断 → Eino 图三节点（拼 system+user 消息 → 文本模型出提示词并清洗 → 生图接口出图并追加画幅说明）→ Go 落盘返回路径 → 前端回填封面背景并重排。生成期间该封面页画占位图、导出被拦截；取消走 job 级 `context`，每张封面一个 job，互不影响。
+
 ### 技术选型
 
 | 层 | 选型 |
 |---|---|
 | 桌面框架 | Wails v2（Go + WebView2 / WKWebView） |
-| 后端 | Go 1.21+ |
+| 后端 | Go 1.25+ |
 | 前端 | Vue 3 + TypeScript + Vite + Pinia |
 | 渲染 | 原生 Canvas 2D（不引入 fabric.js / konva：画布是**只读渲染结果**，不需要对象模型） |
 | 文本切分 | `Intl.Segmenter` + 自研断行器 |
 | 字体 | 系统字体 + 用户上传，**不内置** |
+| AI 编排 | [Eino](https://github.com/cloudwego/eino) `compose.Graph`：拼消息 → 文本模型 → 生图（线性三节点，无循环/工具调用） |
+| 大模型接入 | OpenAI 兼容接口，[eino-ext openai](https://github.com/cloudwego/eino-ext) 做文本模型；生图走原生 `net/http`（带重试与超时） |
 
 ### 目录结构
 
@@ -219,6 +244,8 @@ textweave/
 ├── app.go                  # 暴露给前端的绑定方法
 ├── wails.json              # Wails 项目配置
 ├── internal/
+│   ├── aicover/            # AI 封面：Eino 工作流、供应商配置、生图请求与落盘、任务取消
+│   ├── agentapi/           # 本地控制口（HTTP 指令转前端事件，供外部 agent 使用）
 │   ├── picker/             # 文件 / 目录选择
 │   ├── fsutil/             # 落盘、ZIP 打包、文件读取
 │   ├── imageinfo/          # 背景图尺寸与格式探测
@@ -232,9 +259,9 @@ textweave/
 │       │   FontMetrics.ts prohibition.ts  lineBreaker.ts
 │       │   paginator.ts   constraint.ts   layout.ts
 │       ├── render/         # 绘制层：background / masks / textPainter / CanvasRenderer / exporters
-│       ├── stores/         # Pinia：参数 → 重算 → 预览；模板库
+│       ├── stores/         # Pinia：参数 → 重算 → 预览；模板库；AI 配置与生图日志（ai.ts）
 │       ├── utils/          # 模板编解码（分享码）、颜色、字体加载、文件名
-│       └── components/     # 界面：输入 / 预览 / 缩略图条 / 参数面板
+│       └── components/     # 界面：输入 / 预览 / 缩略图条 / 参数面板 / AI 配置与日志
 ├── scripts/                # 构建、打包、图标生成、逻辑验证脚本
 ├── build/                  # 图标源与各平台打包资源
 └── .github/workflows/      # release.yml：双平台自动构建
@@ -266,6 +293,8 @@ task --list                    # 安装了 go-task 时可查看全部任务
 - 输入按纯文本处理，不做 Markdown 解析
 - **不内置中文字体**：跨机器一致性依赖用户自行上传品牌字体，界面会显示当前实际生效的字体名
 - 禁则采用「推出」原则修正，未实现 W3C 规定的「先挤进」（标点压缩），极端情况下行宽会有轻微参差；开启两端对齐可缓解
+- 一键生成封面依赖外部模型服务，需自备 API Key；单张通常 30–60 秒（受模型与网络影响），生成期间不能导出
+- 生成的封面图片按时间戳累积在 `<配置目录>/covers`，暂不自动清理；AI 日志只记成功的那次，失败与取消不落盘
 - Python 增强通道当前不承载核心功能，Python 缺失时相关入口置灰，核心渲染链路不受影响
 
 ---

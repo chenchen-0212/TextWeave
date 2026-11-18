@@ -111,9 +111,9 @@ covers/      # 生成的封面图片
 
 | 平台 | 文件 | 说明 |
 |---|---|---|
-| Windows x64 | `TextWeave-0.6.0-windows-amd64-portable.exe` | 便携版，双击即用，无需安装 |
-| Windows x64 | `TextWeave-0.6.0-windows-amd64-setup.exe` | NSIS 安装包 |
-| macOS | `TextWeave-0.6.0-macos-universal.dmg` | 拖拽安装，兼容 Apple Silicon 与 Intel |
+| Windows x64 | `TextWeave-0.6.1-windows-amd64-portable.exe` | 便携版，双击即用，无需安装 |
+| Windows x64 | `TextWeave-0.6.1-windows-amd64-setup.exe` | NSIS 安装包 |
+| macOS | `TextWeave-0.6.1-macos-universal.dmg` | 拖拽安装，兼容 Apple Silicon 与 Intel |
 
 **运行要求**：
 

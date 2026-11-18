@@ -23,7 +23,7 @@ import (
 )
 
 // Version 应用版本号，随构建可注入。
-var Version = "0.6.0"
+var Version = "0.6.1"
 
 // App 是暴露给前端的绑定对象。
 //
